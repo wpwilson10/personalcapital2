@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from personalcapital2._validation import (
+    is_account_id,
     safe_float,
     safe_float_or_none,
     validate_and_extract,
@@ -31,11 +32,6 @@ _KNOWN_PERF_KEYS = frozenset(
 
 # Benchmark keys are detected dynamically (any key starting with ^)
 _KNOWN_BENCH_KEYS = frozenset({"date"})
-
-
-def _is_account_id(key: str) -> bool:
-    """Check if a performance dict key is a numeric account ID."""
-    return key.isdigit()
 
 
 def parse_investment_performance(response: dict[str, Any], synced_at: str) -> list[dict[str, Any]]:
@@ -64,7 +60,7 @@ def parse_investment_performance(response: dict[str, Any], synced_at: str) -> li
         try:
             date = validate_date(entry["date"], "investment_performance")
             for key, value in entry.items():
-                if key in _SKIP_KEYS or not _is_account_id(key):
+                if key in _SKIP_KEYS or not is_account_id(key):
                     continue
                 perf_value = safe_float_or_none(value, f"performance[{key}]")
                 rows.append(

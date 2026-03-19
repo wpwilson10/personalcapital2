@@ -136,3 +136,8 @@ def safe_float_or_none(value: object, context: str) -> float | None:
     if value is None:
         return None
     return safe_float(value, context)
+
+
+def is_account_id(key: str) -> bool:
+    """Check if a response dict key is a numeric account ID (not an annotation or metadata key)."""
+    return key.isdigit()

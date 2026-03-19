@@ -102,9 +102,9 @@ def parse_holdings(response: dict[str, Any], snapshot_date: str) -> list[dict[st
                     "ticker": ticker,
                     "cusip": cusip,
                     "description": description,
-                    "quantity": safe_float(h.get("quantity", 0.0), "quantity"),
-                    "price": safe_float(h.get("price", 0.0), "price"),
-                    "value": safe_float(h.get("value", 0.0), "value"),
+                    "quantity": safe_float(h["quantity"], "quantity"),
+                    "price": safe_float(h["price"], "price"),
+                    "value": safe_float(h["value"], "value"),
                     "holding_type": h.get("holdingType"),
                     "security_type": h.get("securityType"),
                     "holding_percentage": safe_float_or_none(

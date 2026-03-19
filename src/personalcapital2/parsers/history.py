@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from personalcapital2._validation import (
+    is_account_id,
     safe_float,
     validate_and_extract,
     validate_date,
@@ -42,11 +43,6 @@ _KNOWN_BAL_KEYS = frozenset(
         "balances",
     }
 )
-
-
-def _is_account_id(key: str) -> bool:
-    """Check if a balances dict key is a numeric account ID (not an annotation)."""
-    return key.isdigit()
 
 
 def parse_net_worth(response: dict[str, Any], synced_at: str) -> list[dict[str, Any]]:
@@ -151,7 +147,7 @@ def parse_account_balances(response: dict[str, Any], synced_at: str) -> list[dic
             balances: dict[str, Any] = entry.get("balances", {})
 
             for key, value in balances.items():
-                if not _is_account_id(key):
+                if not is_account_id(key):
                     continue
                 account_id = int(key)
                 row = {

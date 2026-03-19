@@ -34,6 +34,7 @@ dev = [
 typeCheckingMode = "strict"
 pythonVersion = "3.12"
 reportUnnecessaryTypeIgnoreComment = true
+exclude = ["scripts", ".venv"]
 
 [[tool.pyright.executionEnvironments]]
 root = "tests"
