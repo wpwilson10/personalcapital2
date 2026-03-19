@@ -6,16 +6,7 @@ Python client for the Empower (formerly Personal Capital) unofficial API.
 
 The package is named `personalcapital2` for discoverability (it replaces the abandoned `personalcapital` package). The API classes use `Empower*` because that's the current service name.
 
-## What you can get
-
-- **Accounts** — linked bank, investment, credit, and loan accounts
-- **Transactions** — spending, income, and transfers with categories
-- **Holdings** — investment positions with tickers, quantities, and values
-- **Net worth** — daily historical breakdown (assets, liabilities, cash, investments, etc.)
-- **Account balances** — daily balance history per account
-- **Investment performance** — cumulative returns per account
-- **Benchmark performance** — S&P 500 and other index returns for comparison
-- **Portfolio vs benchmark** — side-by-side portfolio and S&P 500 indexed values
+Based on the original reverse-engineering work by [haochi/personalcapital](https://github.com/haochi/personalcapital) (MIT) and the URL migration fix by [traviscook21/personalcapital](https://github.com/traviscook21/personalcapital) (MIT). Rewritten with type safety, JSON session persistence, proper error handling, and a typed model layer.
 
 ## Install
 
@@ -53,7 +44,118 @@ pvb = client.get_portfolio_vs_benchmark(date(2025, 1, 1), date(2026, 3, 31))
 categories = client.get_categories(date(2026, 1, 1), date(2026, 3, 31))
 ```
 
+## Models
+
 All convenience methods return frozen dataclasses with proper types (`datetime.date` for dates, `float` for amounts, `None` for optional fields).
+
+### Account
+
+| Field | Type |
+|---|---|
+| `user_account_id` | `int` |
+| `account_id` | `str` |
+| `name` | `str` |
+| `firm_name` | `str` |
+| `account_type` | `str` |
+| `account_type_group` | `str \| None` |
+| `product_type` | `str` |
+| `currency` | `str` |
+| `is_asset` | `bool` |
+| `is_closed` | `bool` |
+| `created_at` | `date \| None` |
+
+### Transaction
+
+| Field | Type |
+|---|---|
+| `user_transaction_id` | `int` |
+| `user_account_id` | `int` |
+| `date` | `date` |
+| `amount` | `float` |
+| `is_cash_in` | `bool` |
+| `is_income` | `bool` |
+| `is_spending` | `bool` |
+| `description` | `str` |
+| `original_description` | `str \| None` |
+| `simple_description` | `str \| None` |
+| `category_id` | `int \| None` |
+| `merchant` | `str \| None` |
+| `transaction_type` | `str \| None` |
+| `status` | `str \| None` |
+| `currency` | `str` |
+
+### Category
+
+| Field | Type |
+|---|---|
+| `category_id` | `int` |
+| `name` | `str` |
+| `type` | `str` |
+
+### Holding
+
+| Field | Type |
+|---|---|
+| `snapshot_date` | `date` |
+| `user_account_id` | `int` |
+| `ticker` | `str \| None` |
+| `cusip` | `str \| None` |
+| `description` | `str` |
+| `quantity` | `float` |
+| `price` | `float` |
+| `value` | `float` |
+| `holding_type` | `str \| None` |
+| `security_type` | `str \| None` |
+| `holding_percentage` | `float \| None` |
+| `source` | `str \| None` |
+
+### NetWorthEntry
+
+| Field | Type |
+|---|---|
+| `date` | `date` |
+| `networth` | `float` |
+| `total_assets` | `float` |
+| `total_liabilities` | `float` |
+| `total_cash` | `float` |
+| `total_investment` | `float` |
+| `total_credit` | `float` |
+| `total_mortgage` | `float` |
+| `total_loan` | `float` |
+| `total_other_assets` | `float` |
+| `total_other_liabilities` | `float` |
+
+### AccountBalance
+
+| Field | Type |
+|---|---|
+| `date` | `date` |
+| `user_account_id` | `int` |
+| `balance` | `float` |
+
+### InvestmentPerformance
+
+| Field | Type |
+|---|---|
+| `date` | `date` |
+| `user_account_id` | `int` |
+| `performance` | `float \| None` |
+
+### BenchmarkPerformance
+
+| Field | Type |
+|---|---|
+| `date` | `date` |
+| `benchmark` | `str` |
+| `performance` | `float` |
+
+### PortfolioVsBenchmark
+
+| Field | Type |
+|---|---|
+| `date` | `date` |
+| `portfolio_value` | `float \| None` |
+| `sp500_value` | `float \| None` |
 
 ## Low-level API
 
