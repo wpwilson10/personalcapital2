@@ -80,7 +80,6 @@ def test_account_from_dict() -> None:
         "is_asset": True,
         "is_closed": False,
         "created_at": "2023-06-15",
-        "updated_at": "2026-03-18T00:00:00",  # should be ignored
     }
     acct = account_from_dict(d)
     assert acct.user_account_id == 123
@@ -109,7 +108,6 @@ def test_account_from_dict_none_optional_fields() -> None:
         "is_asset": False,
         "is_closed": False,
         "created_at": None,
-        "updated_at": "",
     }
     acct = account_from_dict(d)
     assert acct.account_type_group is None
@@ -136,7 +134,6 @@ def test_transaction_from_dict() -> None:
         "transaction_type": "Purchase",
         "status": "posted",
         "currency": "USD",
-        "synced_at": "2026-03-18T00:00:00",  # should be ignored
     }
     txn = transaction_from_dict(d)
     assert txn.user_transaction_id == 999
@@ -165,7 +162,6 @@ def test_transaction_from_dict_none_optional_fields() -> None:
         "transaction_type": None,
         "status": None,
         "currency": "USD",
-        "synced_at": "",
     }
     txn = transaction_from_dict(d)
     assert txn.original_description is None
@@ -253,7 +249,6 @@ def test_net_worth_entry_from_dict() -> None:
         "total_loan": 5000.0,
         "total_other_assets": 0.0,
         "total_other_liabilities": 0.0,
-        "synced_at": "2026-03-18T00:00:00",  # should be ignored
     }
     nw = net_worth_entry_from_dict(d)
     assert nw.date == date(2026, 3, 1)
@@ -270,7 +265,6 @@ def test_account_balance_from_dict() -> None:
         "date": "2026-02-28",
         "user_account_id": 789,
         "balance": 5432.10,
-        "synced_at": "2026-03-18T00:00:00",  # should be ignored
     }
     bal = account_balance_from_dict(d)
     assert bal.date == date(2026, 2, 28)
@@ -286,7 +280,6 @@ def test_investment_performance_from_dict() -> None:
         "date": "2026-03-15",
         "user_account_id": 100,
         "performance": 0.0823,
-        "synced_at": "",
     }
     ip = investment_performance_from_dict(d)
     assert ip.date == date(2026, 3, 15)
@@ -299,7 +292,6 @@ def test_investment_performance_from_dict_none_performance() -> None:
         "date": "2026-03-15",
         "user_account_id": 100,
         "performance": None,
-        "synced_at": "",
     }
     ip = investment_performance_from_dict(d)
     assert ip.performance is None
@@ -313,7 +305,6 @@ def test_benchmark_performance_from_dict() -> None:
         "date": "2026-03-15",
         "benchmark": "^INX",
         "performance": 0.1245,
-        "synced_at": "",
     }
     bp = benchmark_performance_from_dict(d)
     assert bp.date == date(2026, 3, 15)
@@ -329,7 +320,6 @@ def test_portfolio_vs_benchmark_from_dict() -> None:
         "date": "2026-03-15",
         "portfolio_value": 105.5,
         "sp500_value": 103.2,
-        "synced_at": "",
     }
     pvb = portfolio_vs_benchmark_from_dict(d)
     assert pvb.date == date(2026, 3, 15)
@@ -342,44 +332,7 @@ def test_portfolio_vs_benchmark_from_dict_none_values() -> None:
         "date": "2026-01-01",
         "portfolio_value": None,
         "sp500_value": None,
-        "synced_at": "",
     }
     pvb = portfolio_vs_benchmark_from_dict(d)
     assert pvb.portfolio_value is None
     assert pvb.sp500_value is None
-
-
-# --- synced_at / updated_at silently ignored ---
-
-
-def test_synced_at_in_dict_is_ignored() -> None:
-    """Extra keys like synced_at in the parser dict should not cause errors."""
-    d = {
-        "date": "2026-01-01",
-        "user_account_id": 1,
-        "balance": 100.0,
-        "synced_at": "2026-03-18T12:00:00",
-    }
-    bal = account_balance_from_dict(d)
-    assert bal.balance == Decimal("100")
-    assert not hasattr(bal, "synced_at")
-
-
-def test_updated_at_in_dict_is_ignored() -> None:
-    """Extra keys like updated_at in the parser dict should not cause errors."""
-    d = {
-        "user_account_id": 1,
-        "account_id": "",
-        "name": "",
-        "firm_name": "",
-        "account_type": "",
-        "account_type_group": None,
-        "product_type": "",
-        "currency": "USD",
-        "is_asset": False,
-        "is_closed": False,
-        "created_at": None,
-        "updated_at": "2026-03-18T00:00:00",
-    }
-    acct = account_from_dict(d)
-    assert not hasattr(acct, "updated_at")

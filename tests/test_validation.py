@@ -189,16 +189,15 @@ def test_parsers_use_validation() -> None:
     from personalcapital2.parsers.quotes import parse_portfolio_vs_benchmark
     from personalcapital2.parsers.transactions import extract_categories, parse_transactions
 
-    synced_at = "2026-03-14T10:00:00"
     empty: dict[str, Any] = {}
 
     # All parsers should handle missing spData gracefully
-    assert parse_accounts(empty, synced_at) == []
-    assert parse_transactions(empty, synced_at) == []
+    assert parse_accounts(empty) == []
+    assert parse_transactions(empty) == []
     assert extract_categories(empty) == []
     assert parse_holdings(empty, "2026-03-14") == []
-    assert parse_net_worth(empty, synced_at) == []
-    assert parse_account_balances(empty, synced_at) == []
-    assert parse_investment_performance(empty, synced_at) == []
-    assert parse_benchmark_performance(empty, synced_at) == []
-    assert parse_portfolio_vs_benchmark(empty, synced_at) == []
+    assert parse_net_worth(empty) == []
+    assert parse_account_balances(empty) == []
+    assert parse_investment_performance(empty) == []
+    assert parse_benchmark_performance(empty) == []
+    assert parse_portfolio_vs_benchmark(empty) == []

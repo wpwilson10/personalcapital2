@@ -20,12 +20,15 @@ dependencies = [
     "requests>=2.31",
 ]
 
+[project.scripts]
+pc2 = "personalcapital2.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pyright>=1.1",
     "ruff>=0.11",
-    "hypothesis>=6.0",
+
     "pre-commit>=4.0",
     "responses>=0.25",
 ]

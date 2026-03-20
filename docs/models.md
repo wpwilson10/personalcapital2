@@ -1,6 +1,6 @@
 # Model Reference
 
-All convenience methods return frozen dataclasses. Dates are `datetime.date`, amounts are `float`, and optional fields are `None` when absent.
+All convenience methods return frozen dataclasses. Dates are `datetime.date`, financial values are `decimal.Decimal`, and optional fields are `None` when absent.
 
 ## Account
 
@@ -29,7 +29,7 @@ Returned by `client.get_transactions(start, end)`.
 | `user_transaction_id` | `int` |
 | `user_account_id` | `int` |
 | `date` | `date` |
-| `amount` | `float` |
+| `amount` | `Decimal` |
 | `is_cash_in` | `bool` |
 | `is_income` | `bool` |
 | `is_spending` | `bool` |
@@ -63,12 +63,12 @@ Returned by `client.get_holdings()`.
 | `ticker` | `str \| None` |
 | `cusip` | `str \| None` |
 | `description` | `str` |
-| `quantity` | `float` |
-| `price` | `float` |
-| `value` | `float` |
+| `quantity` | `Decimal` |
+| `price` | `Decimal` |
+| `value` | `Decimal` |
 | `holding_type` | `str \| None` |
 | `security_type` | `str \| None` |
-| `holding_percentage` | `float \| None` |
+| `holding_percentage` | `Decimal \| None` |
 | `source` | `str \| None` |
 
 ## NetWorthEntry
@@ -78,16 +78,16 @@ Returned by `client.get_net_worth(start, end)`.
 | Field | Type |
 |---|---|
 | `date` | `date` |
-| `networth` | `float` |
-| `total_assets` | `float` |
-| `total_liabilities` | `float` |
-| `total_cash` | `float` |
-| `total_investment` | `float` |
-| `total_credit` | `float` |
-| `total_mortgage` | `float` |
-| `total_loan` | `float` |
-| `total_other_assets` | `float` |
-| `total_other_liabilities` | `float` |
+| `networth` | `Decimal` |
+| `total_assets` | `Decimal` |
+| `total_liabilities` | `Decimal` |
+| `total_cash` | `Decimal` |
+| `total_investment` | `Decimal` |
+| `total_credit` | `Decimal` |
+| `total_mortgage` | `Decimal` |
+| `total_loan` | `Decimal` |
+| `total_other_assets` | `Decimal` |
+| `total_other_liabilities` | `Decimal` |
 
 ## AccountBalance
 
@@ -97,7 +97,7 @@ Returned by `client.get_account_balances(start, end)`.
 |---|---|
 | `date` | `date` |
 | `user_account_id` | `int` |
-| `balance` | `float` |
+| `balance` | `Decimal` |
 
 ## InvestmentPerformance
 
@@ -107,7 +107,7 @@ Returned by `client.get_investment_performance(start, end, account_ids)`.
 |---|---|
 | `date` | `date` |
 | `user_account_id` | `int` |
-| `performance` | `float \| None` |
+| `performance` | `Decimal \| None` |
 
 ## BenchmarkPerformance
 
@@ -117,7 +117,7 @@ Returned by `client.get_benchmark_performance(start, end, account_ids)`.
 |---|---|
 | `date` | `date` |
 | `benchmark` | `str` |
-| `performance` | `float` |
+| `performance` | `Decimal` |
 
 ## PortfolioVsBenchmark
 
@@ -126,5 +126,5 @@ Returned by `client.get_portfolio_vs_benchmark(start, end)`.
 | Field | Type |
 |---|---|
 | `date` | `date` |
-| `portfolio_value` | `float \| None` |
-| `sp500_value` | `float \| None` |
+| `portfolio_value` | `Decimal \| None` |
+| `sp500_value` | `Decimal \| None` |

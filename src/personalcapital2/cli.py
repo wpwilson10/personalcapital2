@@ -91,9 +91,17 @@ def _parse_account_ids(s: str) -> list[int]:
         ) from None
 
 
-def _json_default(obj: object) -> float | str:
-    """JSON serializer for Decimal and date objects."""
+def _json_default(obj: object) -> int | float | str:
+    """JSON serializer for Decimal and date objects.
+
+    Decimals that are exact integers serialize as int (e.g. 150000 not 150000.0).
+    All other Decimals serialize as float, which is lossless for values within
+    float64 range - sufficient for financial data (IEEE 754 has 15-17 significant
+    digits, far exceeding any dollar amount or percentage the API returns).
+    """
     if isinstance(obj, Decimal):
+        if obj == obj.to_integral_value():
+            return int(obj)
         return float(obj)
     return str(obj)
 

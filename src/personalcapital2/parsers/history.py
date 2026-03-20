@@ -45,7 +45,7 @@ _KNOWN_BAL_KEYS = frozenset(
 )
 
 
-def parse_net_worth(response: dict[str, Any], synced_at: str) -> list[dict[str, Any]]:
+def parse_net_worth(response: dict[str, Any], synced_at: str = "") -> list[dict[str, Any]]:
     """Parse getHistories -> networthHistories into daily net worth dicts.
 
     Filters out zero-value rows where all financial fields are 0 — these are
@@ -53,7 +53,7 @@ def parse_net_worth(response: dict[str, Any], synced_at: str) -> list[dict[str, 
 
     Args:
         response: Raw API response from getHistories.
-        synced_at: ISO-8601 timestamp of this sync run.
+        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of net worth dicts with normalized keys.
@@ -100,7 +100,6 @@ def parse_net_worth(response: dict[str, Any], synced_at: str) -> list[dict[str, 
                     "total_other_liabilities": safe_decimal(
                         entry.get("totalOtherLiabilities", 0.0), "totalOtherLiabilities"
                     ),
-                    "synced_at": synced_at,
                 }
             )
         except (KeyError, ValueError, TypeError) as exc:
@@ -119,7 +118,7 @@ def parse_net_worth(response: dict[str, Any], synced_at: str) -> list[dict[str, 
     return rows
 
 
-def parse_account_balances(response: dict[str, Any], synced_at: str) -> list[dict[str, Any]]:
+def parse_account_balances(response: dict[str, Any], synced_at: str = "") -> list[dict[str, Any]]:
     """Parse getHistories -> histories into daily account balance dicts.
 
     Filters out:
@@ -128,10 +127,10 @@ def parse_account_balances(response: dict[str, Any], synced_at: str) -> list[dic
 
     Args:
         response: Raw API response from getHistories.
-        synced_at: ISO-8601 timestamp of this sync run.
+        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
-        List of balance dicts with keys: date, user_account_id, balance, synced_at.
+        List of balance dicts with keys: date, user_account_id, balance.
     """
     histories, _sp_data_keys = validate_and_extract(
         response,
@@ -156,7 +155,6 @@ def parse_account_balances(response: dict[str, Any], synced_at: str) -> list[dic
                     "date": date,
                     "user_account_id": account_id,
                     "balance": safe_decimal(value, f"balance[{key}]"),
-                    "synced_at": synced_at,
                 }
                 if account_id not in account_rows:
                     account_rows[account_id] = []

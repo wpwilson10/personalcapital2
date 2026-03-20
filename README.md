@@ -27,6 +27,38 @@ for txn in transactions:
     print(f"{txn.date}  {txn.description:<30}  ${txn.amount:.2f}")
 ```
 
+## CLI
+
+A command-line interface is included as `pc2`:
+
+```bash
+# Authenticate (interactive, supports 2FA)
+pc2 login
+
+# Fetch data
+pc2 accounts
+pc2 transactions --start 30d --end today
+pc2 holdings
+pc2 net-worth --start mb-12 --end today
+pc2 balances --start 90d --end today
+pc2 categories --start mb --end today
+pc2 portfolio --start 365d --end today
+pc2 performance --start 365d --end today --account-ids 100,200
+pc2 benchmarks --start 365d --end today --account-ids 100,200
+
+# Output as CSV
+pc2 --format csv transactions --start 30d --end today
+
+# Raw API call
+pc2 raw /newaccount/getAccounts2
+
+# Session management
+pc2 status
+pc2 logout
+```
+
+Date shortcuts: `today`, `30d` (days ago), `mb` (month begin), `mb-3` (3 months ago begin), `me` (month end), `me-1` (last month end).
+
 ## Available methods
 
 | Method | Returns |
@@ -39,9 +71,10 @@ for txn in transactions:
 | `get_account_balances(start, end)` | `list[AccountBalance]` |
 | `get_investment_performance(start, end, account_ids)` | `list[InvestmentPerformance]` |
 | `get_benchmark_performance(start, end, account_ids)` | `list[BenchmarkPerformance]` |
+| `get_performance_and_benchmarks(start, end, account_ids)` | `tuple[list[InvestmentPerformance], list[BenchmarkPerformance]]` |
 | `get_portfolio_vs_benchmark(start, end)` | `list[PortfolioVsBenchmark]` |
 
-Date parameters are `datetime.date`. All methods return frozen dataclasses — see [Model Reference](docs/models.md) for every field and type.
+Date parameters are `datetime.date`. Financial values are `decimal.Decimal`. All methods return frozen dataclasses — see [Model Reference](docs/models.md) for every field and type.
 
 ## More examples
 
@@ -69,7 +102,7 @@ For direct endpoint access, use `fetch()` with optional parsers:
 from personalcapital2.parsers import parse_accounts
 
 data = client.fetch("/newaccount/getAccounts2")
-rows = parse_accounts(data, synced_at="2026-01-01T00:00:00")
+rows = parse_accounts(data)
 # list[dict[str, Any]] — raw parser output, no dataclass conversion
 ```
 

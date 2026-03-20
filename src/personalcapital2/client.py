@@ -176,7 +176,7 @@ class EmpowerClient:
     def get_accounts(self) -> list[Account]:
         """Fetch all linked accounts."""
         response = self.fetch("/newaccount/getAccounts2")
-        rows = parse_accounts(response, synced_at="")
+        rows = parse_accounts(response)
         return [account_from_dict(r) for r in rows]
 
     def get_transactions(self, start: date, end: date) -> list[Transaction]:
@@ -193,7 +193,7 @@ class EmpowerClient:
                 "component": "DATAGRID",
             },
         )
-        rows = parse_transactions(response, synced_at="")
+        rows = parse_transactions(response)
         return [transaction_from_dict(r) for r in rows]
 
     def get_categories(self, start: date, end: date) -> list[Category]:
@@ -239,7 +239,7 @@ class EmpowerClient:
                 "includeNetworthCategoryDetails": "true",
             },
         )
-        rows = parse_net_worth(response, synced_at="")
+        rows = parse_net_worth(response)
         return [net_worth_entry_from_dict(r) for r in rows]
 
     def get_account_balances(self, start: date, end: date) -> list[AccountBalance]:
@@ -254,7 +254,7 @@ class EmpowerClient:
                 "includeNetworthCategoryDetails": "true",
             },
         )
-        rows = parse_account_balances(response, synced_at="")
+        rows = parse_account_balances(response)
         return [account_balance_from_dict(r) for r in rows]
 
     def get_investment_performance(
@@ -277,7 +277,7 @@ class EmpowerClient:
                 "userAccountIds": json.dumps(account_ids),
             },
         )
-        rows = parse_investment_performance(response, synced_at="")
+        rows = parse_investment_performance(response)
         return [investment_performance_from_dict(r) for r in rows]
 
     def get_benchmark_performance(
@@ -300,7 +300,7 @@ class EmpowerClient:
                 "userAccountIds": json.dumps(account_ids),
             },
         )
-        rows = parse_benchmark_performance(response, synced_at="")
+        rows = parse_benchmark_performance(response)
         return [benchmark_performance_from_dict(r) for r in rows]
 
     def get_performance_and_benchmarks(
@@ -322,8 +322,8 @@ class EmpowerClient:
                 "userAccountIds": json.dumps(account_ids),
             },
         )
-        inv_rows = parse_investment_performance(response, synced_at="")
-        bench_rows = parse_benchmark_performance(response, synced_at="")
+        inv_rows = parse_investment_performance(response)
+        bench_rows = parse_benchmark_performance(response)
         return (
             [investment_performance_from_dict(r) for r in inv_rows],
             [benchmark_performance_from_dict(r) for r in bench_rows],
@@ -342,7 +342,7 @@ class EmpowerClient:
                 "includeYOUHistory": "true",
             },
         )
-        rows = parse_portfolio_vs_benchmark(response, synced_at="")
+        rows = parse_portfolio_vs_benchmark(response)
         return [portfolio_vs_benchmark_from_dict(r) for r in rows]
 
     # --- Data Fetching ---
@@ -541,9 +541,6 @@ class EmpowerClient:
         # Update CSRF if the server rotated it
         if "csrf" in header:
             self._csrf = header["csrf"]
-
-        if self._session_path:
-            self.save_session()
 
     def _send_2fa_challenge(self, mode: TwoFactorMode) -> None:
         """Request a 2FA code via SMS or email."""

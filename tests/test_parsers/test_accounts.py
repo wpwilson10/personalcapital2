@@ -36,7 +36,6 @@ def test_parse_basic_account() -> None:
     assert row["is_asset"] is True
     assert row["is_closed"] is False
     assert row["created_at"] == "2015-09-01"  # UTC conversion of epoch ms
-    assert row["updated_at"] == "2026-03-14T10:00:00"
 
 
 def test_closed_account() -> None:

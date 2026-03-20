@@ -15,26 +15,19 @@ from personalcapital2._validation import (
 
 log = logging.getLogger(__name__)
 
-# Keys to skip when extracting per-account performance
-_SKIP_KEYS = frozenset(
-    {"date", "aggregatePerformance", "aggregateAnnotation", "compositeInceptionReturn"}
-)
-
-# Known keys for performance history entries (account IDs are dynamic)
+# Known non-account keys for performance history entries.
+# Also used to skip when extracting per-account performance (account IDs are dynamic).
 _KNOWN_PERF_KEYS = frozenset(
-    {
-        "date",
-        "aggregatePerformance",
-        "aggregateAnnotation",
-        "compositeInceptionReturn",
-    }
+    {"date", "aggregatePerformance", "aggregateAnnotation", "compositeInceptionReturn"}
 )
 
 # Benchmark keys are detected dynamically (any key starting with ^)
 _KNOWN_BENCH_KEYS = frozenset({"date"})
 
 
-def parse_investment_performance(response: dict[str, Any], synced_at: str) -> list[dict[str, Any]]:
+def parse_investment_performance(
+    response: dict[str, Any], synced_at: str = ""
+) -> list[dict[str, Any]]:
     """Parse performanceHistory into per-account investment performance dicts.
 
     Extracts per-account cumulative returns, filtering out annotation keys
@@ -42,10 +35,10 @@ def parse_investment_performance(response: dict[str, Any], synced_at: str) -> li
 
     Args:
         response: Raw API response from getPerformanceHistories.
-        synced_at: ISO-8601 timestamp of this sync run.
+        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
-        List of performance dicts with keys: date, user_account_id, performance, synced_at.
+        List of performance dicts with keys: date, user_account_id, performance.
     """
     perf_history, _sp_data_keys = validate_and_extract(
         response,
@@ -60,7 +53,7 @@ def parse_investment_performance(response: dict[str, Any], synced_at: str) -> li
         try:
             date = validate_date(entry["date"], "investment_performance")
             for key, value in entry.items():
-                if key in _SKIP_KEYS or not is_account_id(key):
+                if key in _KNOWN_PERF_KEYS or not is_account_id(key):
                     continue
                 perf_value = safe_decimal_or_none(value, f"performance[{key}]")
                 rows.append(
@@ -68,7 +61,6 @@ def parse_investment_performance(response: dict[str, Any], synced_at: str) -> li
                         "date": date,
                         "user_account_id": int(key),
                         "performance": perf_value,
-                        "synced_at": synced_at,
                     }
                 )
         except (KeyError, ValueError, TypeError) as exc:
@@ -85,15 +77,17 @@ def parse_investment_performance(response: dict[str, Any], synced_at: str) -> li
     return rows
 
 
-def parse_benchmark_performance(response: dict[str, Any], synced_at: str) -> list[dict[str, Any]]:
+def parse_benchmark_performance(
+    response: dict[str, Any], synced_at: str = ""
+) -> list[dict[str, Any]]:
     """Parse benchmarkPerformanceHistory into benchmark performance dicts.
 
     Args:
         response: Raw API response from getPerformanceHistories.
-        synced_at: ISO-8601 timestamp of this sync run.
+        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
-        List of benchmark dicts with keys: date, benchmark, performance, synced_at.
+        List of benchmark dicts with keys: date, benchmark, performance.
     """
     bench_history, _sp_data_keys = validate_and_extract(
         response,
@@ -117,7 +111,6 @@ def parse_benchmark_performance(response: dict[str, Any], synced_at: str) -> lis
                         "date": date,
                         "benchmark": key,
                         "performance": safe_decimal(value, f"benchmark[{key}]"),
-                        "synced_at": synced_at,
                     }
                 )
         except (KeyError, ValueError, TypeError) as exc:

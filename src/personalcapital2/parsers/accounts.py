@@ -54,12 +54,12 @@ def _epoch_ms_to_iso(epoch_ms: int | float) -> str:
     return datetime.fromtimestamp(epoch_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
 
 
-def parse_accounts(response: dict[str, Any], synced_at: str) -> list[dict[str, Any]]:
+def parse_accounts(response: dict[str, Any], synced_at: str = "") -> list[dict[str, Any]]:
     """Parse getAccounts2 response into account row dicts.
 
     Args:
         response: Raw API response from getAccounts2.
-        synced_at: ISO-8601 timestamp of this sync run.
+        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of account dicts with normalized keys.
@@ -93,7 +93,6 @@ def parse_accounts(response: dict[str, Any], synced_at: str) -> list[dict[str, A
                     "is_asset": acct.get("isAsset", False),
                     "is_closed": is_closed,
                     "created_at": created_at,
-                    "updated_at": synced_at,
                 }
             )
         except (KeyError, ValueError, TypeError) as exc:

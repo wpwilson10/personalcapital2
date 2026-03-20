@@ -37,7 +37,6 @@ def test_parse_net_worth() -> None:
     assert row["total_liabilities"] == Decimal("1260.32")
     assert row["total_cash"] == Decimal("16762.64")
     assert row["total_investment"] == Decimal("774258.12")
-    assert row["synced_at"] == "2026-03-14T10:00:00"
 
 
 def test_parse_account_balances_filters_annotations() -> None:
@@ -65,7 +64,6 @@ def test_parse_account_balances_filters_annotations() -> None:
 
     for row in rows:
         assert row["date"] == "2026-03-14"
-        assert row["synced_at"] == "2026-03-14T10:00:00"
         assert isinstance(row["balance"], Decimal)
 
 

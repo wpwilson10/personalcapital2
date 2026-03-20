@@ -11,8 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal  # noqa: TC003 — used at runtime in dataclass fields
 from typing import Any
+
+from personalcapital2._validation import (
+    safe_decimal,
+    safe_decimal_or_none,
+)
 
 
 def _parse_date(s: str) -> date:
@@ -23,30 +28,6 @@ def _parse_date(s: str) -> date:
 def _parse_date_or_none(s: str | None) -> date | None:
     """Convert an ISO-8601 date string to a date object, or None."""
     return date.fromisoformat(s) if s is not None else None
-
-
-def _to_decimal(value: object) -> Decimal:
-    """Ensure a value is Decimal.
-
-    Parsers produce Decimal values via ``safe_decimal``. This function
-    provides runtime safety for direct ``from_dict`` usage with raw
-    (non-parser) dicts.
-    """
-    if isinstance(value, Decimal):
-        return value
-    if isinstance(value, int | float):
-        return Decimal(str(value))
-    if isinstance(value, str):
-        return Decimal(value)
-    msg = f"Cannot convert {type(value).__name__} to Decimal"
-    raise TypeError(msg)
-
-
-def _to_decimal_or_none(value: object) -> Decimal | None:
-    """Ensure a value is Decimal or None."""
-    if value is None:
-        return None
-    return _to_decimal(value)
 
 
 # --- Models ---
@@ -194,7 +175,7 @@ def transaction_from_dict(d: dict[str, Any]) -> Transaction:
         user_transaction_id=d["user_transaction_id"],
         user_account_id=d["user_account_id"],
         date=_parse_date(d["date"]),
-        amount=_to_decimal(d["amount"]),
+        amount=safe_decimal(d["amount"], "amount"),
         is_cash_in=d["is_cash_in"],
         is_income=d["is_income"],
         is_spending=d["is_spending"],
@@ -224,12 +205,12 @@ def holding_from_dict(d: dict[str, Any]) -> Holding:
         ticker=d["ticker"],
         cusip=d["cusip"],
         description=d["description"],
-        quantity=_to_decimal(d["quantity"]),
-        price=_to_decimal(d["price"]),
-        value=_to_decimal(d["value"]),
+        quantity=safe_decimal(d["quantity"], "quantity"),
+        price=safe_decimal(d["price"], "price"),
+        value=safe_decimal(d["value"], "value"),
         holding_type=d["holding_type"],
         security_type=d["security_type"],
-        holding_percentage=_to_decimal_or_none(d["holding_percentage"]),
+        holding_percentage=safe_decimal_or_none(d["holding_percentage"], "holdingPercentage"),
         source=d["source"],
     )
 
@@ -237,16 +218,18 @@ def holding_from_dict(d: dict[str, Any]) -> Holding:
 def net_worth_entry_from_dict(d: dict[str, Any]) -> NetWorthEntry:
     return NetWorthEntry(
         date=_parse_date(d["date"]),
-        networth=_to_decimal(d["networth"]),
-        total_assets=_to_decimal(d["total_assets"]),
-        total_liabilities=_to_decimal(d["total_liabilities"]),
-        total_cash=_to_decimal(d["total_cash"]),
-        total_investment=_to_decimal(d["total_investment"]),
-        total_credit=_to_decimal(d["total_credit"]),
-        total_mortgage=_to_decimal(d["total_mortgage"]),
-        total_loan=_to_decimal(d["total_loan"]),
-        total_other_assets=_to_decimal(d["total_other_assets"]),
-        total_other_liabilities=_to_decimal(d["total_other_liabilities"]),
+        networth=safe_decimal(d["networth"], "networth"),
+        total_assets=safe_decimal(d["total_assets"], "total_assets"),
+        total_liabilities=safe_decimal(d["total_liabilities"], "total_liabilities"),
+        total_cash=safe_decimal(d["total_cash"], "total_cash"),
+        total_investment=safe_decimal(d["total_investment"], "total_investment"),
+        total_credit=safe_decimal(d["total_credit"], "total_credit"),
+        total_mortgage=safe_decimal(d["total_mortgage"], "total_mortgage"),
+        total_loan=safe_decimal(d["total_loan"], "total_loan"),
+        total_other_assets=safe_decimal(d["total_other_assets"], "total_other_assets"),
+        total_other_liabilities=safe_decimal(
+            d["total_other_liabilities"], "total_other_liabilities"
+        ),
     )
 
 
@@ -254,7 +237,7 @@ def account_balance_from_dict(d: dict[str, Any]) -> AccountBalance:
     return AccountBalance(
         date=_parse_date(d["date"]),
         user_account_id=d["user_account_id"],
-        balance=_to_decimal(d["balance"]),
+        balance=safe_decimal(d["balance"], "balance"),
     )
 
 
@@ -262,7 +245,7 @@ def investment_performance_from_dict(d: dict[str, Any]) -> InvestmentPerformance
     return InvestmentPerformance(
         date=_parse_date(d["date"]),
         user_account_id=d["user_account_id"],
-        performance=_to_decimal_or_none(d["performance"]),
+        performance=safe_decimal_or_none(d["performance"], "performance"),
     )
 
 
@@ -270,13 +253,13 @@ def benchmark_performance_from_dict(d: dict[str, Any]) -> BenchmarkPerformance:
     return BenchmarkPerformance(
         date=_parse_date(d["date"]),
         benchmark=d["benchmark"],
-        performance=_to_decimal(d["performance"]),
+        performance=safe_decimal(d["performance"], "performance"),
     )
 
 
 def portfolio_vs_benchmark_from_dict(d: dict[str, Any]) -> PortfolioVsBenchmark:
     return PortfolioVsBenchmark(
         date=_parse_date(d["date"]),
-        portfolio_value=_to_decimal_or_none(d["portfolio_value"]),
-        sp500_value=_to_decimal_or_none(d["sp500_value"]),
+        portfolio_value=safe_decimal_or_none(d["portfolio_value"], "portfolio_value"),
+        sp500_value=safe_decimal_or_none(d["sp500_value"], "sp500_value"),
     )

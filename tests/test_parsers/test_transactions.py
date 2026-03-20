@@ -44,7 +44,6 @@ def test_parse_transaction() -> None:
     assert row["is_spending"] is True
     assert row["description"] == "Uber"
     assert row["category_id"] == 39
-    assert row["synced_at"] == "2026-03-14T10:00:00"
 
 
 def test_extract_categories_deduplicates() -> None:

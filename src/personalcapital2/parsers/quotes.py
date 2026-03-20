@@ -24,17 +24,19 @@ _KNOWN_KEYS = frozenset(
 )
 
 
-def parse_portfolio_vs_benchmark(response: dict[str, Any], synced_at: str) -> list[dict[str, Any]]:
+def parse_portfolio_vs_benchmark(
+    response: dict[str, Any], synced_at: str = ""
+) -> list[dict[str, Any]]:
     """Parse getQuotes -> histories into portfolio vs benchmark dicts.
 
     Extracts the "YOU" (portfolio) and "^INX" (S&P 500) series.
 
     Args:
         response: Raw API response from getQuotes.
-        synced_at: ISO-8601 timestamp of this sync run.
+        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
-        List of dicts with keys: date, portfolio_value, sp500_value, synced_at.
+        List of dicts with keys: date, portfolio_value, sp500_value.
     """
     histories, _sp_data_keys = validate_and_extract(
         response, ["spData", "histories"], _KNOWN_KEYS, "getQuotes"
@@ -56,7 +58,6 @@ def parse_portfolio_vs_benchmark(response: dict[str, Any], synced_at: str) -> li
                     "date": validate_date(entry["date"], "portfolio_vs_benchmark"),
                     "portfolio_value": safe_decimal_or_none(you_value, "portfolio_value"),
                     "sp500_value": safe_decimal_or_none(inx_value, "sp500_value"),
-                    "synced_at": synced_at,
                 }
             )
         except (KeyError, ValueError, TypeError) as exc:
