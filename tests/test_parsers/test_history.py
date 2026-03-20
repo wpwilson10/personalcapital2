@@ -1,5 +1,7 @@
 """Tests for the history parser."""
 
+from decimal import Decimal
+
 from personalcapital2.parsers.history import parse_account_balances, parse_net_worth
 
 
@@ -30,11 +32,11 @@ def test_parse_net_worth() -> None:
     assert len(rows) == 1
     row = rows[0]
     assert row["date"] == "2026-03-14"
-    assert row["networth"] == 789760.45
-    assert row["total_assets"] == 791020.76
-    assert row["total_liabilities"] == 1260.32
-    assert row["total_cash"] == 16762.64
-    assert row["total_investment"] == 774258.12
+    assert row["networth"] == Decimal("789760.45")
+    assert row["total_assets"] == Decimal("791020.76")
+    assert row["total_liabilities"] == Decimal("1260.32")
+    assert row["total_cash"] == Decimal("16762.64")
+    assert row["total_investment"] == Decimal("774258.12")
     assert row["synced_at"] == "2026-03-14T10:00:00"
 
 
@@ -64,7 +66,7 @@ def test_parse_account_balances_filters_annotations() -> None:
     for row in rows:
         assert row["date"] == "2026-03-14"
         assert row["synced_at"] == "2026-03-14T10:00:00"
-        assert isinstance(row["balance"], float)
+        assert isinstance(row["balance"], Decimal)
 
 
 def test_malformed_balance_entry_skipped_not_crash() -> None:
@@ -91,7 +93,7 @@ def test_malformed_balance_entry_skipped_not_crash() -> None:
     # The entry with non-numeric balance should be skipped, the valid one kept
     assert len(rows) == 1
     assert rows[0]["user_account_id"] == 305886753
-    assert rows[0]["balance"] == 25000.0
+    assert rows[0]["balance"] == Decimal("25000.0")
 
 
 def test_empty_histories() -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 
@@ -22,6 +23,30 @@ def _parse_date(s: str) -> date:
 def _parse_date_or_none(s: str | None) -> date | None:
     """Convert an ISO-8601 date string to a date object, or None."""
     return date.fromisoformat(s) if s is not None else None
+
+
+def _to_decimal(value: object) -> Decimal:
+    """Ensure a value is Decimal.
+
+    Parsers produce Decimal values via ``safe_decimal``. This function
+    provides runtime safety for direct ``from_dict`` usage with raw
+    (non-parser) dicts.
+    """
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, int | float):
+        return Decimal(str(value))
+    if isinstance(value, str):
+        return Decimal(value)
+    msg = f"Cannot convert {type(value).__name__} to Decimal"
+    raise TypeError(msg)
+
+
+def _to_decimal_or_none(value: object) -> Decimal | None:
+    """Ensure a value is Decimal or None."""
+    if value is None:
+        return None
+    return _to_decimal(value)
 
 
 # --- Models ---
@@ -51,7 +76,7 @@ class Transaction:
     user_transaction_id: int
     user_account_id: int
     date: date
-    amount: float
+    amount: Decimal
     is_cash_in: bool
     is_income: bool
     is_spending: bool
@@ -83,12 +108,12 @@ class Holding:
     ticker: str | None
     cusip: str | None
     description: str
-    quantity: float
-    price: float
-    value: float
+    quantity: Decimal
+    price: Decimal
+    value: Decimal
     holding_type: str | None
     security_type: str | None
-    holding_percentage: float | None
+    holding_percentage: Decimal | None
     source: str | None
 
 
@@ -97,16 +122,16 @@ class NetWorthEntry:
     """A daily net worth breakdown."""
 
     date: date
-    networth: float
-    total_assets: float
-    total_liabilities: float
-    total_cash: float
-    total_investment: float
-    total_credit: float
-    total_mortgage: float
-    total_loan: float
-    total_other_assets: float
-    total_other_liabilities: float
+    networth: Decimal
+    total_assets: Decimal
+    total_liabilities: Decimal
+    total_cash: Decimal
+    total_investment: Decimal
+    total_credit: Decimal
+    total_mortgage: Decimal
+    total_loan: Decimal
+    total_other_assets: Decimal
+    total_other_liabilities: Decimal
 
 
 @dataclass(frozen=True)
@@ -115,7 +140,7 @@ class AccountBalance:
 
     date: date
     user_account_id: int
-    balance: float
+    balance: Decimal
 
 
 @dataclass(frozen=True)
@@ -124,7 +149,7 @@ class InvestmentPerformance:
 
     date: date
     user_account_id: int
-    performance: float | None
+    performance: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -133,7 +158,7 @@ class BenchmarkPerformance:
 
     date: date
     benchmark: str
-    performance: float
+    performance: Decimal
 
 
 @dataclass(frozen=True)
@@ -141,8 +166,8 @@ class PortfolioVsBenchmark:
     """Daily portfolio vs S&P 500 comparison values."""
 
     date: date
-    portfolio_value: float | None
-    sp500_value: float | None
+    portfolio_value: Decimal | None
+    sp500_value: Decimal | None
 
 
 # --- Converters (parser dict → model) ---
@@ -169,7 +194,7 @@ def transaction_from_dict(d: dict[str, Any]) -> Transaction:
         user_transaction_id=d["user_transaction_id"],
         user_account_id=d["user_account_id"],
         date=_parse_date(d["date"]),
-        amount=d["amount"],
+        amount=_to_decimal(d["amount"]),
         is_cash_in=d["is_cash_in"],
         is_income=d["is_income"],
         is_spending=d["is_spending"],
@@ -199,12 +224,12 @@ def holding_from_dict(d: dict[str, Any]) -> Holding:
         ticker=d["ticker"],
         cusip=d["cusip"],
         description=d["description"],
-        quantity=d["quantity"],
-        price=d["price"],
-        value=d["value"],
+        quantity=_to_decimal(d["quantity"]),
+        price=_to_decimal(d["price"]),
+        value=_to_decimal(d["value"]),
         holding_type=d["holding_type"],
         security_type=d["security_type"],
-        holding_percentage=d["holding_percentage"],
+        holding_percentage=_to_decimal_or_none(d["holding_percentage"]),
         source=d["source"],
     )
 
@@ -212,16 +237,16 @@ def holding_from_dict(d: dict[str, Any]) -> Holding:
 def net_worth_entry_from_dict(d: dict[str, Any]) -> NetWorthEntry:
     return NetWorthEntry(
         date=_parse_date(d["date"]),
-        networth=d["networth"],
-        total_assets=d["total_assets"],
-        total_liabilities=d["total_liabilities"],
-        total_cash=d["total_cash"],
-        total_investment=d["total_investment"],
-        total_credit=d["total_credit"],
-        total_mortgage=d["total_mortgage"],
-        total_loan=d["total_loan"],
-        total_other_assets=d["total_other_assets"],
-        total_other_liabilities=d["total_other_liabilities"],
+        networth=_to_decimal(d["networth"]),
+        total_assets=_to_decimal(d["total_assets"]),
+        total_liabilities=_to_decimal(d["total_liabilities"]),
+        total_cash=_to_decimal(d["total_cash"]),
+        total_investment=_to_decimal(d["total_investment"]),
+        total_credit=_to_decimal(d["total_credit"]),
+        total_mortgage=_to_decimal(d["total_mortgage"]),
+        total_loan=_to_decimal(d["total_loan"]),
+        total_other_assets=_to_decimal(d["total_other_assets"]),
+        total_other_liabilities=_to_decimal(d["total_other_liabilities"]),
     )
 
 
@@ -229,7 +254,7 @@ def account_balance_from_dict(d: dict[str, Any]) -> AccountBalance:
     return AccountBalance(
         date=_parse_date(d["date"]),
         user_account_id=d["user_account_id"],
-        balance=d["balance"],
+        balance=_to_decimal(d["balance"]),
     )
 
 
@@ -237,7 +262,7 @@ def investment_performance_from_dict(d: dict[str, Any]) -> InvestmentPerformance
     return InvestmentPerformance(
         date=_parse_date(d["date"]),
         user_account_id=d["user_account_id"],
-        performance=d["performance"],
+        performance=_to_decimal_or_none(d["performance"]),
     )
 
 
@@ -245,13 +270,13 @@ def benchmark_performance_from_dict(d: dict[str, Any]) -> BenchmarkPerformance:
     return BenchmarkPerformance(
         date=_parse_date(d["date"]),
         benchmark=d["benchmark"],
-        performance=d["performance"],
+        performance=_to_decimal(d["performance"]),
     )
 
 
 def portfolio_vs_benchmark_from_dict(d: dict[str, Any]) -> PortfolioVsBenchmark:
     return PortfolioVsBenchmark(
         date=_parse_date(d["date"]),
-        portfolio_value=d["portfolio_value"],
-        sp500_value=d["sp500_value"],
+        portfolio_value=_to_decimal_or_none(d["portfolio_value"]),
+        sp500_value=_to_decimal_or_none(d["sp500_value"]),
     )

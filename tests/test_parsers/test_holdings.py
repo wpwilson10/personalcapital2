@@ -1,5 +1,7 @@
 """Tests for the holdings parser."""
 
+from decimal import Decimal
+
 from personalcapital2.parsers.holdings import parse_holdings
 
 
@@ -30,8 +32,8 @@ def test_parse_holding_with_ticker() -> None:
     assert row["snapshot_date"] == "2026-03-14"
     assert row["ticker"] == "VTSAX"
     assert row["cusip"] == "922908769"
-    assert row["quantity"] == 100.5
-    assert row["value"] == 12090.15
+    assert row["quantity"] == Decimal("100.5")
+    assert row["value"] == Decimal("12090.15")
 
 
 def test_empty_ticker_becomes_none() -> None:

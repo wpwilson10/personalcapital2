@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -46,7 +47,7 @@ def test_transaction_is_frozen() -> None:
         user_transaction_id=1,
         user_account_id=2,
         date=date(2024, 3, 15),
-        amount=50.0,
+        amount=Decimal("50"),
         is_cash_in=False,
         is_income=False,
         is_spending=True,
@@ -60,7 +61,7 @@ def test_transaction_is_frozen() -> None:
         currency="USD",
     )
     with pytest.raises(AttributeError):
-        txn.amount = 100.0  # type: ignore[misc]
+        txn.amount = Decimal("100")  # type: ignore[misc]
 
 
 # --- Account from_dict ---
@@ -140,7 +141,7 @@ def test_transaction_from_dict() -> None:
     txn = transaction_from_dict(d)
     assert txn.user_transaction_id == 999
     assert txn.date == date(2026, 1, 20)
-    assert txn.amount == 42.50
+    assert txn.amount == Decimal("42.5")
     assert txn.is_spending is True
     assert txn.original_description == "GROCERY STORE #1234"
     assert txn.category_id == 7
@@ -208,9 +209,9 @@ def test_holding_from_dict() -> None:
     assert h.snapshot_date == date(2026, 3, 18)
     assert h.ticker == "AAPL"
     assert h.cusip == "037833100"
-    assert h.quantity == 10.0
-    assert h.value == 1755.00
-    assert h.holding_percentage == 0.15
+    assert h.quantity == Decimal("10")
+    assert h.value == Decimal("1755")
+    assert h.holding_percentage == Decimal("0.15")
 
 
 def test_holding_from_dict_none_optional_fields() -> None:
@@ -256,9 +257,9 @@ def test_net_worth_entry_from_dict() -> None:
     }
     nw = net_worth_entry_from_dict(d)
     assert nw.date == date(2026, 3, 1)
-    assert nw.networth == 150000.0
-    assert nw.total_assets == 200000.0
-    assert nw.total_liabilities == 50000.0
+    assert nw.networth == Decimal("150000")
+    assert nw.total_assets == Decimal("200000")
+    assert nw.total_liabilities == Decimal("50000")
 
 
 # --- AccountBalance from_dict ---
@@ -274,7 +275,7 @@ def test_account_balance_from_dict() -> None:
     bal = account_balance_from_dict(d)
     assert bal.date == date(2026, 2, 28)
     assert bal.user_account_id == 789
-    assert bal.balance == 5432.10
+    assert bal.balance == Decimal("5432.1")
 
 
 # --- InvestmentPerformance from_dict ---
@@ -290,7 +291,7 @@ def test_investment_performance_from_dict() -> None:
     ip = investment_performance_from_dict(d)
     assert ip.date == date(2026, 3, 15)
     assert ip.user_account_id == 100
-    assert ip.performance == 0.0823
+    assert ip.performance == Decimal("0.0823")
 
 
 def test_investment_performance_from_dict_none_performance() -> None:
@@ -317,7 +318,7 @@ def test_benchmark_performance_from_dict() -> None:
     bp = benchmark_performance_from_dict(d)
     assert bp.date == date(2026, 3, 15)
     assert bp.benchmark == "^INX"
-    assert bp.performance == 0.1245
+    assert bp.performance == Decimal("0.1245")
 
 
 # --- PortfolioVsBenchmark from_dict ---
@@ -332,8 +333,8 @@ def test_portfolio_vs_benchmark_from_dict() -> None:
     }
     pvb = portfolio_vs_benchmark_from_dict(d)
     assert pvb.date == date(2026, 3, 15)
-    assert pvb.portfolio_value == 105.5
-    assert pvb.sp500_value == 103.2
+    assert pvb.portfolio_value == Decimal("105.5")
+    assert pvb.sp500_value == Decimal("103.2")
 
 
 def test_portfolio_vs_benchmark_from_dict_none_values() -> None:
@@ -360,7 +361,7 @@ def test_synced_at_in_dict_is_ignored() -> None:
         "synced_at": "2026-03-18T12:00:00",
     }
     bal = account_balance_from_dict(d)
-    assert bal.balance == 100.0
+    assert bal.balance == Decimal("100")
     assert not hasattr(bal, "synced_at")
 
 

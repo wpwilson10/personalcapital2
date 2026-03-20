@@ -1,0 +1,684 @@
+"""Tests for the pc2 CLI."""
+
+from __future__ import annotations
+
+import json
+from datetime import date, timedelta
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from personalcapital2.cli import (
+    EXIT_API,
+    EXIT_AUTH,
+    EXIT_USAGE,
+    _parse_account_ids,
+    _parse_date,
+    _serialize_csv,
+    _serialize_json,
+    build_parser,
+    main,
+)
+from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
+from personalcapital2.models import (
+    Account,
+    AccountBalance,
+    BenchmarkPerformance,
+    Category,
+    Holding,
+    InvestmentPerformance,
+    NetWorthEntry,
+    PortfolioVsBenchmark,
+    Transaction,
+)
+
+# --- _parse_date unit tests ---
+
+
+def test_parse_date_iso() -> None:
+    assert _parse_date("2026-01-15") == date(2026, 1, 15)
+
+
+def test_parse_date_today() -> None:
+    assert _parse_date("today") == date.today()
+
+
+def test_parse_date_days_ago() -> None:
+    assert _parse_date("30d") == date.today() - timedelta(days=30)
+
+
+def test_parse_date_zero_days() -> None:
+    assert _parse_date("0d") == date.today()
+
+
+def test_parse_date_month_begin() -> None:
+    result = _parse_date("mb")
+    assert result.day == 1
+    assert result.month == date.today().month
+    assert result.year == date.today().year
+
+
+def test_parse_date_month_begin_back() -> None:
+    result = _parse_date("mb-3")
+    today = date.today()
+    expected_month = today.month - 3
+    expected_year = today.year
+    while expected_month < 1:
+        expected_month += 12
+        expected_year -= 1
+    assert result == date(expected_year, expected_month, 1)
+
+
+def test_parse_date_month_end() -> None:
+    result = _parse_date("me")
+    assert result.month == date.today().month
+    # Last day of current month
+    import calendar
+
+    expected_day = calendar.monthrange(date.today().year, date.today().month)[1]
+    assert result.day == expected_day
+
+
+def test_parse_date_month_end_back() -> None:
+    result = _parse_date("me-1")
+    today = date.today()
+    expected_month = today.month - 1
+    expected_year = today.year
+    if expected_month < 1:
+        expected_month += 12
+        expected_year -= 1
+    import calendar
+
+    expected_day = calendar.monthrange(expected_year, expected_month)[1]
+    assert result == date(expected_year, expected_month, expected_day)
+
+
+def test_parse_date_month_begin_wraps_year() -> None:
+    """mb-N that crosses a year boundary."""
+    result = _parse_date("mb-12")
+    today = date.today()
+    expected_month = today.month - 12
+    expected_year = today.year
+    while expected_month < 1:
+        expected_month += 12
+        expected_year -= 1
+    assert result == date(expected_year, expected_month, 1)
+
+
+def test_parse_date_invalid() -> None:
+    with pytest.raises(Exception, match="invalid date"):
+        _parse_date("not-a-date")
+
+
+def test_parse_date_invalid_iso() -> None:
+    with pytest.raises(Exception, match="invalid date"):
+        _parse_date("2026-13-01")
+
+
+# --- _parse_account_ids unit tests ---
+
+
+def test_parse_account_ids_single() -> None:
+    assert _parse_account_ids("100") == [100]
+
+
+def test_parse_account_ids_multiple() -> None:
+    assert _parse_account_ids("100,200,300") == [100, 200, 300]
+
+
+def test_parse_account_ids_with_spaces() -> None:
+    assert _parse_account_ids("100, 200, 300") == [100, 200, 300]
+
+
+def test_parse_account_ids_empty() -> None:
+    with pytest.raises(Exception, match="must not be empty"):
+        _parse_account_ids("")
+
+
+def test_parse_account_ids_non_numeric() -> None:
+    with pytest.raises(Exception, match="must be comma-separated integers"):
+        _parse_account_ids("abc,def")
+
+
+# --- Serialization unit tests ---
+
+
+def _sample_account() -> Account:
+    return Account(
+        user_account_id=100,
+        account_id="A-1",
+        name="Checking",
+        firm_name="Big Bank",
+        account_type="BANK",
+        account_type_group="CASH",
+        product_type="CHECKING",
+        currency="USD",
+        is_asset=True,
+        is_closed=False,
+        created_at=date(2024, 1, 1),
+    )
+
+
+def _sample_transaction() -> Transaction:
+    return Transaction(
+        user_transaction_id=500,
+        user_account_id=100,
+        date=date(2026, 1, 15),
+        amount=Decimal("42.50"),
+        is_cash_in=False,
+        is_income=False,
+        is_spending=True,
+        description="Coffee Shop",
+        original_description="COFFEE SHOP #99",
+        simple_description="Coffee",
+        category_id=3,
+        merchant="Java Joe",
+        transaction_type="Purchase",
+        status="posted",
+        currency="USD",
+    )
+
+
+def test_serialize_json_models() -> None:
+    items: list[object] = [_sample_account()]
+    result = _serialize_json(items)
+    parsed = json.loads(result)
+    assert len(parsed) == 1
+    assert parsed[0]["user_account_id"] == 100
+    assert parsed[0]["name"] == "Checking"
+
+
+def test_serialize_json_empty() -> None:
+    assert _serialize_json([]) == "[]"
+
+
+def test_serialize_json_dates_become_strings() -> None:
+    items: list[object] = [_sample_account()]
+    result = _serialize_json(items)
+    parsed = json.loads(result)
+    assert parsed[0]["created_at"] == "2024-01-01"
+
+
+def test_serialize_csv_models() -> None:
+    items: list[object] = [_sample_account()]
+    result = _serialize_csv(items)
+    lines = result.strip().split("\n")
+    assert len(lines) == 2  # header + 1 row
+    assert "user_account_id" in lines[0]
+    assert "100" in lines[1]
+
+
+def test_serialize_csv_empty() -> None:
+    assert _serialize_csv([]) == ""
+
+
+def test_serialize_csv_none_fields() -> None:
+    """None fields should serialize as empty string in CSV."""
+    txn = Transaction(
+        user_transaction_id=1,
+        user_account_id=2,
+        date=date(2026, 1, 1),
+        amount=Decimal("10"),
+        is_cash_in=False,
+        is_income=False,
+        is_spending=True,
+        description="Test",
+        original_description=None,
+        simple_description=None,
+        category_id=None,
+        merchant=None,
+        transaction_type=None,
+        status=None,
+        currency="USD",
+    )
+    items: list[object] = [txn]
+    result = _serialize_csv(items)
+    # csv.DictWriter writes None as empty string
+    parsed_lines = result.strip().split("\n")
+    assert len(parsed_lines) == 2
+
+
+# --- build_parser tests ---
+
+
+def test_parser_has_subcommands() -> None:
+    parser = build_parser()
+    # Parse a known subcommand
+    args = parser.parse_args(["accounts"])
+    assert args.command == "accounts"
+
+
+def test_parser_transactions_requires_dates() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["transactions"])
+
+
+def test_parser_performance_requires_account_ids() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["performance", "--start", "today", "--end", "today"])
+
+
+def test_parser_format_default_json() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["accounts"])
+    assert args.format == "json"
+
+
+def test_parser_format_csv() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--format", "csv", "accounts"])
+    assert args.format == "csv"
+
+
+def test_parser_raw_endpoint() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["raw", "/newaccount/getAccounts2"])
+    assert args.endpoint == "/newaccount/getAccounts2"
+
+
+def test_parser_raw_data_pairs() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["raw", "/endpoint", "--data", "key1=val1", "--data", "key2=val2"])
+    assert args.data == ["key1=val1", "key2=val2"]
+
+
+# --- Helper to create a fake session file ---
+
+
+def _create_session(tmp_path: Path) -> Path:
+    """Create a valid session file and return its path."""
+    session_path = tmp_path / "session.json"
+    session_data: dict[str, str | dict[str, str]] = {
+        "csrf": "test-csrf-token",
+        "cookies": {},
+    }
+    session_path.write_text(json.dumps(session_data))
+    session_path.chmod(0o600)
+    return session_path
+
+
+# --- Command integration tests (mock EmpowerClient) ---
+
+
+def test_cmd_accounts_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    account = _sample_account()
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_accounts.return_value = [account]
+        main(["--session", str(session), "accounts"])
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert len(parsed) == 1
+    assert parsed[0]["user_account_id"] == 100
+
+
+def test_cmd_accounts_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    account = _sample_account()
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_accounts.return_value = [account]
+        main(["--format", "csv", "--session", str(session), "accounts"])
+
+    captured = capsys.readouterr()
+    lines = captured.out.strip().split("\n")
+    assert "user_account_id" in lines[0]
+    assert "100" in lines[1]
+
+
+def test_cmd_transactions_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    txn = _sample_transaction()
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_transactions.return_value = [txn]
+        main(
+            [
+                "--session",
+                str(session),
+                "transactions",
+                "--start",
+                "2026-01-01",
+                "--end",
+                "2026-01-31",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["amount"] == 42.50
+
+
+def test_cmd_categories_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    cat = Category(category_id=7, name="Groceries", type="EXPENSE")
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_categories.return_value = [cat]
+        main(["--session", str(session), "categories", "--start", "mb", "--end", "today"])
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["name"] == "Groceries"
+
+
+def test_cmd_holdings_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    holding = Holding(
+        snapshot_date=date(2026, 3, 19),
+        user_account_id=200,
+        ticker="VTI",
+        cusip="922908769",
+        description="Vanguard Total Stock Mkt ETF",
+        quantity=Decimal("50"),
+        price=Decimal("250"),
+        value=Decimal("12500"),
+        holding_type="etf",
+        security_type="equity",
+        holding_percentage=Decimal("0.75"),
+        source="broker",
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_holdings.return_value = [holding]
+        main(["--session", str(session), "holdings"])
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["ticker"] == "VTI"
+
+
+def test_cmd_net_worth_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    nw = NetWorthEntry(
+        date=date(2026, 3, 1),
+        networth=Decimal("150000"),
+        total_assets=Decimal("200000"),
+        total_liabilities=Decimal("50000"),
+        total_cash=Decimal("30000"),
+        total_investment=Decimal("170000"),
+        total_credit=Decimal("5000"),
+        total_mortgage=Decimal("40000"),
+        total_loan=Decimal("5000"),
+        total_other_assets=Decimal("0"),
+        total_other_liabilities=Decimal("0"),
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_net_worth.return_value = [nw]
+        main(["--session", str(session), "net-worth", "--start", "mb", "--end", "today"])
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["networth"] == 150000.0
+
+
+def test_cmd_balances_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    bal = AccountBalance(date=date(2026, 3, 15), user_account_id=789, balance=Decimal("5432.10"))
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_account_balances.return_value = [bal]
+        main(["--session", str(session), "balances", "--start", "mb", "--end", "today"])
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["balance"] == 5432.10
+
+
+def test_cmd_performance_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    perf = InvestmentPerformance(
+        date=date(2026, 3, 15), user_account_id=300, performance=Decimal("0.0823")
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_investment_performance.return_value = [perf]
+        main(
+            [
+                "--session",
+                str(session),
+                "performance",
+                "--start",
+                "mb",
+                "--end",
+                "today",
+                "--account-ids",
+                "300",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["performance"] == 0.0823
+
+
+def test_cmd_benchmarks_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    bench = BenchmarkPerformance(
+        date=date(2026, 3, 15), benchmark="^INX", performance=Decimal("0.1245")
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_benchmark_performance.return_value = [bench]
+        main(
+            [
+                "--session",
+                str(session),
+                "benchmarks",
+                "--start",
+                "mb",
+                "--end",
+                "today",
+                "--account-ids",
+                "300",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["benchmark"] == "^INX"
+
+
+def test_cmd_portfolio_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    pvb = PortfolioVsBenchmark(
+        date=date(2026, 3, 15),
+        portfolio_value=Decimal("105.5"),
+        sp500_value=Decimal("103.2"),
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_portfolio_vs_benchmark.return_value = [pvb]
+        main(["--session", str(session), "portfolio", "--start", "mb", "--end", "today"])
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["portfolio_value"] == 105.5
+
+
+def test_cmd_raw_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    raw_response: dict[str, Any] = {"spHeader": {"success": True}, "spData": {"key": "value"}}
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.fetch.return_value = raw_response
+        main(["--session", str(session), "raw", "/test/endpoint", "--data", "key=value"])
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed["spData"]["key"] == "value"
+
+    # Verify fetch was called with correct args
+    instance.fetch.assert_called_once_with("/test/endpoint", {"key": "value"})
+
+
+def test_cmd_raw_no_data(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    raw_response: dict[str, Any] = {"spHeader": {"success": True}, "spData": {}}
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.fetch.return_value = raw_response
+        main(["--session", str(session), "raw", "/test/endpoint"])
+
+    instance.fetch.assert_called_once_with("/test/endpoint", None)
+
+
+# --- Error handling tests ---
+
+
+def test_auth_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_accounts.side_effect = EmpowerAuthError("Session expired")
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--session", str(session), "accounts"])
+
+    assert exc_info.value.code == EXIT_AUTH
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "EmpowerAuthError"
+    assert "Session expired" in err["error"]
+
+
+def test_api_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_accounts.side_effect = EmpowerAPIError("Server error")
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--session", str(session), "accounts"])
+
+    assert exc_info.value.code == EXIT_API
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "EmpowerAPIError"
+
+
+def test_no_session_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session_path = tmp_path / "nonexistent.json"
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--session", str(session_path), "accounts"])
+
+    assert exc_info.value.code == EXIT_AUTH
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert "No session found" in err["error"]
+
+
+def test_no_command_shows_help(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main([])
+
+    assert exc_info.value.code == EXIT_USAGE
+    captured = capsys.readouterr()
+    assert "pc2" in captured.out
+
+
+# --- Auth command tests ---
+
+
+def test_cmd_login(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = tmp_path / "session.json"
+
+    with patch("personalcapital2.cli.authenticate") as mock_auth:
+        mock_client = MagicMock()
+        mock_auth.return_value = mock_client
+        main(["--session", str(session), "login"])
+
+    mock_auth.assert_called_once_with(session_path=session)
+    mock_client.save_session.assert_called_once_with(session)
+    captured = capsys.readouterr()
+    assert "Logged in" in captured.out
+
+
+def test_cmd_logout_deletes_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    assert session.exists()
+
+    main(["--session", str(session), "logout"])
+
+    assert not session.exists()
+    captured = capsys.readouterr()
+    assert "deleted" in captured.out
+
+
+def test_cmd_logout_no_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = tmp_path / "nonexistent.json"
+
+    main(["--session", str(session), "logout"])
+
+    captured = capsys.readouterr()
+    assert "No session file" in captured.out
+
+
+def test_cmd_status_exists(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+
+    main(["--session", str(session), "status"])
+
+    captured = capsys.readouterr()
+    assert "Session:" in captured.out
+    assert "Last modified:" in captured.out
+
+
+def test_cmd_status_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = tmp_path / "nonexistent.json"
+
+    main(["--session", str(session), "status"])
+
+    captured = capsys.readouterr()
+    assert "No session found" in captured.out

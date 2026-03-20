@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from personalcapital2._validation import validate_and_extract
@@ -112,56 +113,68 @@ def test_validate_and_extract_returns_empty_when_items_not_dicts() -> None:
     assert "items" in sp_keys
 
 
-def test_safe_float_converts_valid_numbers() -> None:
-    from personalcapital2._validation import safe_float
+def test_safe_decimal_converts_valid_numbers() -> None:
+    from personalcapital2._validation import safe_decimal
 
-    assert safe_float(42, "test") == 42.0
-    assert safe_float(3.14, "test") == 3.14
-    assert safe_float("99.5", "test") == 99.5
-    assert safe_float(0, "test") == 0.0
-    assert safe_float(-7.5, "test") == -7.5
+    assert safe_decimal(42, "test") == Decimal("42")
+    assert safe_decimal(3.14, "test") == Decimal("3.14")
+    assert safe_decimal("99.5", "test") == Decimal("99.5")
+    assert safe_decimal(0, "test") == Decimal("0")
+    assert safe_decimal(-7.5, "test") == Decimal("-7.5")
 
 
-def test_safe_float_rejects_nan_and_infinity() -> None:
-    import math
-
+def test_safe_decimal_rejects_nan_and_infinity() -> None:
     import pytest
 
-    from personalcapital2._validation import safe_float
+    from personalcapital2._validation import safe_decimal
 
     with pytest.raises(ValueError, match="non-finite"):
-        safe_float(float("nan"), "test")
+        safe_decimal(float("nan"), "test")
     with pytest.raises(ValueError, match="non-finite"):
-        safe_float(float("inf"), "test")
+        safe_decimal(float("inf"), "test")
     with pytest.raises(ValueError, match="non-finite"):
-        safe_float(float("-inf"), "test")
-    with pytest.raises(ValueError, match="non-finite"):
-        safe_float(math.nan, "test")
+        safe_decimal(float("-inf"), "test")
 
 
-def test_safe_float_rejects_non_numeric_types() -> None:
+def test_safe_decimal_rejects_non_numeric_types() -> None:
     import pytest
 
-    from personalcapital2._validation import safe_float
+    from personalcapital2._validation import safe_decimal
 
     with pytest.raises(ValueError, match="cannot convert list"):
-        safe_float([1, 2, 3], "test")
+        safe_decimal([1, 2, 3], "test")
     with pytest.raises(ValueError, match="cannot convert dict"):
-        safe_float({"a": 1}, "test")
+        safe_decimal({"a": 1}, "test")
 
 
-def test_safe_float_or_none_returns_none_for_none() -> None:
-    from personalcapital2._validation import safe_float_or_none
+def test_safe_decimal_or_none_returns_none_for_none() -> None:
+    from personalcapital2._validation import safe_decimal_or_none
 
-    assert safe_float_or_none(None, "test") is None
+    assert safe_decimal_or_none(None, "test") is None
 
 
-def test_safe_float_or_none_converts_valid_numbers() -> None:
-    from personalcapital2._validation import safe_float_or_none
+def test_safe_decimal_or_none_converts_valid_numbers() -> None:
+    from personalcapital2._validation import safe_decimal_or_none
 
-    assert safe_float_or_none(42, "test") == 42.0
-    assert safe_float_or_none(3.14, "test") == 3.14
-    assert safe_float_or_none("99.5", "test") == 99.5
+    assert safe_decimal_or_none(42, "test") == Decimal("42")
+    assert safe_decimal_or_none(3.14, "test") == Decimal("3.14")
+    assert safe_decimal_or_none("99.5", "test") == Decimal("99.5")
+
+
+def test_safe_decimal_passes_through_decimal() -> None:
+    from personalcapital2._validation import safe_decimal
+
+    d = Decimal("123.45")
+    assert safe_decimal(d, "test") is d
+
+
+def test_safe_decimal_converts_float_via_string() -> None:
+    """Float → Decimal conversion avoids precision artifacts."""
+    from personalcapital2._validation import safe_decimal
+
+    # 0.1 is not exactly representable as float, but str(0.1) = "0.1"
+    result = safe_decimal(0.1, "test")
+    assert result == Decimal("0.1")
 
 
 def test_parsers_use_validation() -> None:

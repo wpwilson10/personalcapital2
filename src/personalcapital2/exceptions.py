@@ -8,6 +8,9 @@ class EmpowerAuthError(Exception):
 class TwoFactorRequiredError(Exception):
     """Raised when the server requires 2FA before password auth can proceed."""
 
+    def __init__(self, message: str = "Two-factor authentication required") -> None:
+        super().__init__(message)
+
 
 class EmpowerAPIError(Exception):
     """Raised when an API call returns spHeader.success = false."""

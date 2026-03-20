@@ -98,7 +98,12 @@ class EmpowerClient:
         self._session = requests.Session()
         self._timeout = timeout
 
-        # Retry transient HTTP errors with exponential backoff
+        # Retry transient HTTP errors with exponential backoff.
+        # POST is included because Empower uses POST for all endpoints,
+        # including read-only data queries. The only non-idempotent POSTs
+        # are 2FA challenge endpoints (SMS/email), but retries are limited
+        # to server errors (5xx/429) where the original request likely
+        # failed before any side effects.
         retry = Retry(
             total=3,
             backoff_factor=1,
@@ -121,6 +126,8 @@ class EmpowerClient:
         )
         self._csrf = ""
         self._session_path = session_path
+        if session_path is not None:
+            self._load_session()
 
     # --- Authentication ---
 
@@ -295,6 +302,32 @@ class EmpowerClient:
         )
         rows = parse_benchmark_performance(response, synced_at="")
         return [benchmark_performance_from_dict(r) for r in rows]
+
+    def get_performance_and_benchmarks(
+        self, start: date, end: date, account_ids: list[int]
+    ) -> tuple[list[InvestmentPerformance], list[BenchmarkPerformance]]:
+        """Fetch investment and benchmark performance in a single API call.
+
+        More efficient than calling ``get_investment_performance()`` and
+        ``get_benchmark_performance()`` separately — both parse from the
+        same ``getPerformanceHistories`` endpoint.
+        """
+        response = self.fetch(
+            "/account/getPerformanceHistories",
+            {
+                "startDate": start.isoformat(),
+                "endDate": end.isoformat(),
+                "interval": "DAY",
+                "requireBenchmark": "true",
+                "userAccountIds": json.dumps(account_ids),
+            },
+        )
+        inv_rows = parse_investment_performance(response, synced_at="")
+        bench_rows = parse_benchmark_performance(response, synced_at="")
+        return (
+            [investment_performance_from_dict(r) for r in inv_rows],
+            [benchmark_performance_from_dict(r) for r in bench_rows],
+        )
 
     def get_portfolio_vs_benchmark(self, start: date, end: date) -> list[PortfolioVsBenchmark]:
         """Fetch daily portfolio vs S&P 500 comparison values."""

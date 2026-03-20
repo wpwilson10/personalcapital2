@@ -1,5 +1,6 @@
 """Tests for the transactions parser."""
 
+from decimal import Decimal
 from typing import Any
 
 from personalcapital2.parsers.transactions import extract_categories, parse_transactions
@@ -38,7 +39,7 @@ def test_parse_transaction() -> None:
     row = rows[0]
     assert row["user_transaction_id"] == 100001
     assert row["date"] == "2026-01-15"
-    assert row["amount"] == 33.64
+    assert row["amount"] == Decimal("33.64")
     assert row["is_cash_in"] is False
     assert row["is_spending"] is True
     assert row["description"] == "Uber"

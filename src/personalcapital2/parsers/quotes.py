@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from personalcapital2._validation import (
-    safe_float_or_none,
+    safe_decimal_or_none,
     validate_and_extract,
     validate_date,
 )
@@ -54,8 +54,8 @@ def parse_portfolio_vs_benchmark(response: dict[str, Any], synced_at: str) -> li
             rows.append(
                 {
                     "date": validate_date(entry["date"], "portfolio_vs_benchmark"),
-                    "portfolio_value": safe_float_or_none(you_value, "portfolio_value"),
-                    "sp500_value": safe_float_or_none(inx_value, "sp500_value"),
+                    "portfolio_value": safe_decimal_or_none(you_value, "portfolio_value"),
+                    "sp500_value": safe_decimal_or_none(inx_value, "sp500_value"),
                     "synced_at": synced_at,
                 }
             )

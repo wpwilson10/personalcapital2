@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from personalcapital2._validation import safe_float, validate_and_extract, validate_date
+from personalcapital2._validation import safe_decimal, validate_and_extract, validate_date
 
 log = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ def parse_transactions(response: dict[str, Any], synced_at: str) -> list[dict[st
             # but some transfers use negative values. Direction is indicated by
             # isCashIn/isCashOut booleans (though these can be unreliable, e.g.
             # refunds sometimes have isSpending=True). Don't normalize here.
-            amount = safe_float(txn["amount"], "transaction.amount")
+            amount = safe_decimal(txn["amount"], "transaction.amount")
 
             rows.append(
                 {

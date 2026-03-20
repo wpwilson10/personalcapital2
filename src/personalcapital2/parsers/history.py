@@ -7,7 +7,7 @@ from typing import Any
 
 from personalcapital2._validation import (
     is_account_id,
-    safe_float,
+    safe_decimal,
     validate_and_extract,
     validate_date,
 )
@@ -70,12 +70,12 @@ def parse_net_worth(response: dict[str, Any], synced_at: str) -> list[dict[str, 
 
     for entry in nw_histories:
         try:
-            networth = safe_float(entry.get("networth", 0.0), "networth")
-            total_assets = safe_float(entry.get("totalAssets", 0.0), "totalAssets")
-            total_liabilities = safe_float(entry.get("totalLiabilities", 0.0), "totalLiabilities")
+            networth = safe_decimal(entry.get("networth", 0.0), "networth")
+            total_assets = safe_decimal(entry.get("totalAssets", 0.0), "totalAssets")
+            total_liabilities = safe_decimal(entry.get("totalLiabilities", 0.0), "totalLiabilities")
 
             # Skip zero-padding rows (pre-account-linking)
-            if networth == 0.0 and total_assets == 0.0 and total_liabilities == 0.0:
+            if not networth and not total_assets and not total_liabilities:
                 skipped_zeros += 1
                 continue
 
@@ -85,17 +85,19 @@ def parse_net_worth(response: dict[str, Any], synced_at: str) -> list[dict[str, 
                     "networth": networth,
                     "total_assets": total_assets,
                     "total_liabilities": total_liabilities,
-                    "total_cash": safe_float(entry.get("totalCash", 0.0), "totalCash"),
-                    "total_investment": safe_float(
+                    "total_cash": safe_decimal(entry.get("totalCash", 0.0), "totalCash"),
+                    "total_investment": safe_decimal(
                         entry.get("totalInvestment", 0.0), "totalInvestment"
                     ),
-                    "total_credit": safe_float(entry.get("totalCredit", 0.0), "totalCredit"),
-                    "total_mortgage": safe_float(entry.get("totalMortgage", 0.0), "totalMortgage"),
-                    "total_loan": safe_float(entry.get("totalLoan", 0.0), "totalLoan"),
-                    "total_other_assets": safe_float(
+                    "total_credit": safe_decimal(entry.get("totalCredit", 0.0), "totalCredit"),
+                    "total_mortgage": safe_decimal(
+                        entry.get("totalMortgage", 0.0), "totalMortgage"
+                    ),
+                    "total_loan": safe_decimal(entry.get("totalLoan", 0.0), "totalLoan"),
+                    "total_other_assets": safe_decimal(
                         entry.get("totalOtherAssets", 0.0), "totalOtherAssets"
                     ),
-                    "total_other_liabilities": safe_float(
+                    "total_other_liabilities": safe_decimal(
                         entry.get("totalOtherLiabilities", 0.0), "totalOtherLiabilities"
                     ),
                     "synced_at": synced_at,
@@ -153,7 +155,7 @@ def parse_account_balances(response: dict[str, Any], synced_at: str) -> list[dic
                 row = {
                     "date": date,
                     "user_account_id": account_id,
-                    "balance": safe_float(value, f"balance[{key}]"),
+                    "balance": safe_decimal(value, f"balance[{key}]"),
                     "synced_at": synced_at,
                 }
                 if account_id not in account_rows:
@@ -178,7 +180,7 @@ def parse_account_balances(response: dict[str, Any], synced_at: str) -> list[dic
         acct_rows.sort(key=lambda r: r["date"])
         first_nonzero_idx = 0
         for i, row in enumerate(acct_rows):
-            if row["balance"] != 0.0:
+            if row["balance"]:
                 first_nonzero_idx = i
                 break
         else:

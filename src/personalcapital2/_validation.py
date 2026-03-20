@@ -11,6 +11,7 @@ import logging
 import math
 import re
 from datetime import datetime as _dt
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -116,26 +117,45 @@ def validate_date(date_str: object, context: str) -> str:
     return date_str
 
 
-def safe_float(value: object, context: str) -> float:
-    """Convert a value to float, rejecting NaN and Infinity.
+def safe_decimal(value: object, context: str) -> Decimal:
+    """Convert a value to Decimal, rejecting NaN and Infinity.
+
+    Float inputs are converted via ``str()`` to avoid precision artifacts
+    (e.g. ``Decimal(0.1)`` → 0.1000000000000000055... vs ``Decimal("0.1")`` → 0.1).
 
     Raises ValueError if the value cannot be converted or is non-finite.
     """
-    if not isinstance(value, int | float | str):
-        msg = f"{context}: cannot convert {type(value).__name__} to float"
-        raise ValueError(msg)
-    result = float(value)
-    if not math.isfinite(result):
-        msg = f"{context}: non-finite value: {result}"
-        raise ValueError(msg)
-    return result
+    if isinstance(value, int):
+        return Decimal(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            msg = f"{context}: non-finite value: {value}"
+            raise ValueError(msg)
+        return Decimal(str(value))
+    if isinstance(value, str):
+        try:
+            result = Decimal(value)
+        except InvalidOperation as exc:
+            msg = f"{context}: cannot convert {value!r} to Decimal"
+            raise ValueError(msg) from exc
+        if not result.is_finite():
+            msg = f"{context}: non-finite value: {result}"
+            raise ValueError(msg)
+        return result
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            msg = f"{context}: non-finite value: {value}"
+            raise ValueError(msg)
+        return value
+    msg = f"{context}: cannot convert {type(value).__name__} to Decimal"
+    raise ValueError(msg)
 
 
-def safe_float_or_none(value: object, context: str) -> float | None:
-    """Convert a value to float or None, rejecting NaN and Infinity."""
+def safe_decimal_or_none(value: object, context: str) -> Decimal | None:
+    """Convert a value to Decimal or None, rejecting NaN and Infinity."""
     if value is None:
         return None
-    return safe_float(value, context)
+    return safe_decimal(value, context)
 
 
 def is_account_id(key: str) -> bool:

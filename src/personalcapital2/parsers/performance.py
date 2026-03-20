@@ -7,8 +7,8 @@ from typing import Any
 
 from personalcapital2._validation import (
     is_account_id,
-    safe_float,
-    safe_float_or_none,
+    safe_decimal,
+    safe_decimal_or_none,
     validate_and_extract,
     validate_date,
 )
@@ -62,7 +62,7 @@ def parse_investment_performance(response: dict[str, Any], synced_at: str) -> li
             for key, value in entry.items():
                 if key in _SKIP_KEYS or not is_account_id(key):
                     continue
-                perf_value = safe_float_or_none(value, f"performance[{key}]")
+                perf_value = safe_decimal_or_none(value, f"performance[{key}]")
                 rows.append(
                     {
                         "date": date,
@@ -116,7 +116,7 @@ def parse_benchmark_performance(response: dict[str, Any], synced_at: str) -> lis
                     {
                         "date": date,
                         "benchmark": key,
-                        "performance": safe_float(value, f"benchmark[{key}]"),
+                        "performance": safe_decimal(value, f"benchmark[{key}]"),
                         "synced_at": synced_at,
                     }
                 )

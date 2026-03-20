@@ -6,8 +6,8 @@ import logging
 from typing import Any
 
 from personalcapital2._validation import (
-    safe_float,
-    safe_float_or_none,
+    safe_decimal,
+    safe_decimal_or_none,
     validate_and_extract,
 )
 
@@ -102,12 +102,12 @@ def parse_holdings(response: dict[str, Any], snapshot_date: str) -> list[dict[st
                     "ticker": ticker,
                     "cusip": cusip,
                     "description": description,
-                    "quantity": safe_float(h["quantity"], "quantity"),
-                    "price": safe_float(h["price"], "price"),
-                    "value": safe_float(h["value"], "value"),
+                    "quantity": safe_decimal(h["quantity"], "quantity"),
+                    "price": safe_decimal(h["price"], "price"),
+                    "value": safe_decimal(h["value"], "value"),
                     "holding_type": h.get("holdingType"),
                     "security_type": h.get("securityType"),
-                    "holding_percentage": safe_float_or_none(
+                    "holding_percentage": safe_decimal_or_none(
                         h.get("holdingPercentage"), "holdingPercentage"
                     ),
                     "source": h.get("source"),

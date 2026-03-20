@@ -175,9 +175,8 @@ def test_save_and_load_session(tmp_path: Path) -> None:
     assert session_path.exists()
     assert session_path.stat().st_mode & 0o777 == 0o600
 
-    # Load into a new client
+    # Load into a new client — constructor auto-loads session
     client2 = EmpowerClient(session_path=session_path)
-    client2._load_session()
     assert client2._csrf == "saved-csrf"
 
 
@@ -186,8 +185,8 @@ def test_load_session_rejects_insecure_permissions(tmp_path: Path) -> None:
     session_path.write_text(json.dumps({"csrf": "leaked", "cookies": {}}))
     session_path.chmod(0o644)
 
+    # Constructor auto-loads, but should skip insecure file
     client = EmpowerClient(session_path=session_path)
-    client._load_session()
     assert client._csrf == ""  # Should not have loaded
 
 
@@ -196,8 +195,8 @@ def test_load_session_handles_corrupt_json(tmp_path: Path) -> None:
     session_path.write_text("not json{{{")
     session_path.chmod(0o600)
 
+    # Constructor auto-loads, but should handle corrupt JSON gracefully
     client = EmpowerClient(session_path=session_path)
-    client._load_session()
     assert client._csrf == ""
 
 

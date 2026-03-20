@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -137,7 +138,7 @@ def test_get_transactions_happy_path() -> None:
     assert len(txns) == 1
     assert isinstance(txns[0], Transaction)
     assert txns[0].date == date(2026, 1, 15)
-    assert txns[0].amount == 42.50
+    assert txns[0].amount == Decimal("42.5")
     assert txns[0].merchant == "Java Joe"
 
 
@@ -240,7 +241,7 @@ def test_get_holdings_happy_path() -> None:
     assert len(holdings) == 1
     assert isinstance(holdings[0], Holding)
     assert holdings[0].ticker == "VTI"
-    assert holdings[0].value == 12500.00
+    assert holdings[0].value == Decimal("12500")
     assert isinstance(holdings[0].snapshot_date, date)
 
 
@@ -287,8 +288,8 @@ def test_get_net_worth_happy_path() -> None:
     assert len(nw) == 1
     assert isinstance(nw[0], NetWorthEntry)
     assert nw[0].date == date(2026, 3, 1)
-    assert nw[0].networth == 150000.0
-    assert nw[0].total_assets == 200000.0
+    assert nw[0].networth == Decimal("150000")
+    assert nw[0].total_assets == Decimal("200000")
 
 
 @responses.activate
@@ -330,7 +331,7 @@ def test_get_account_balances_happy_path() -> None:
     assert isinstance(bals[0], AccountBalance)
     assert bals[0].date == date(2026, 3, 15)
     assert bals[0].user_account_id == 789
-    assert bals[0].balance == 5432.10
+    assert bals[0].balance == Decimal("5432.1")
 
 
 @responses.activate
@@ -369,7 +370,7 @@ def test_get_investment_performance_happy_path() -> None:
     assert isinstance(perfs[0], InvestmentPerformance)
     assert perfs[0].date == date(2026, 3, 15)
     assert perfs[0].user_account_id == 300
-    assert perfs[0].performance == 0.0823
+    assert perfs[0].performance == Decimal("0.0823")
 
 
 @responses.activate
@@ -413,7 +414,7 @@ def test_get_benchmark_performance_happy_path() -> None:
     assert isinstance(benchmarks[0], BenchmarkPerformance)
     assert benchmarks[0].date == date(2026, 3, 15)
     assert benchmarks[0].benchmark == "^INX"
-    assert benchmarks[0].performance == 0.1245
+    assert benchmarks[0].performance == Decimal("0.1245")
 
 
 @responses.activate
@@ -424,6 +425,48 @@ def test_get_benchmark_performance_empty() -> None:
     )
     client = _make_client()
     assert client.get_benchmark_performance(date(2026, 1, 1), date(2026, 3, 31), [300]) == []
+
+
+# --- get_performance_and_benchmarks (combined) ---
+
+
+@responses.activate
+def test_get_performance_and_benchmarks_single_call() -> None:
+    """Combined method should fetch both from a single API call."""
+    responses.post(
+        _api_url("/account/getPerformanceHistories"),
+        json=_success_response(
+            {
+                "performanceHistory": [
+                    {
+                        "date": "2026-03-15",
+                        "300": 0.0823,
+                        "aggregatePerformance": 0.09,
+                    }
+                ],
+                "benchmarkPerformanceHistory": [
+                    {
+                        "date": "2026-03-15",
+                        "^INX": 0.1245,
+                    }
+                ],
+            }
+        ),
+    )
+    client = _make_client()
+    perfs, benchmarks = client.get_performance_and_benchmarks(
+        date(2026, 1, 1), date(2026, 3, 31), [300]
+    )
+
+    # Only one API call should have been made
+    assert len(responses.calls) == 1
+
+    assert len(perfs) == 1
+    assert perfs[0].performance == Decimal("0.0823")
+
+    assert len(benchmarks) == 1
+    assert benchmarks[0].benchmark == "^INX"
+    assert benchmarks[0].performance == Decimal("0.1245")
 
 
 # --- get_portfolio_vs_benchmark ---
@@ -451,8 +494,8 @@ def test_get_portfolio_vs_benchmark_happy_path() -> None:
     assert len(pvb) == 1
     assert isinstance(pvb[0], PortfolioVsBenchmark)
     assert pvb[0].date == date(2026, 3, 15)
-    assert pvb[0].portfolio_value == 105.5
-    assert pvb[0].sp500_value == 103.2
+    assert pvb[0].portfolio_value == Decimal("105.5")
+    assert pvb[0].sp500_value == Decimal("103.2")
 
 
 @responses.activate
