@@ -28,35 +28,46 @@ from urllib3.util.retry import Retry
 
 from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, TwoFactorRequiredError
 from personalcapital2.models import (
-    Account,
     AccountBalance,
-    BenchmarkPerformance,
-    Category,
-    Holding,
-    InvestmentPerformance,
-    NetWorthEntry,
-    PortfolioVsBenchmark,
-    Transaction,
+    AccountsResult,
+    HoldingsResult,
+    NetWorthResult,
+    PerformanceResult,
+    QuotesResult,
+    TransactionsResult,
     account_balance_from_dict,
     account_from_dict,
+    account_performance_summary_from_dict,
+    accounts_summary_from_dict,
     benchmark_performance_from_dict,
     category_from_dict,
     holding_from_dict,
     investment_performance_from_dict,
+    market_quote_from_dict,
     net_worth_entry_from_dict,
+    net_worth_summary_from_dict,
+    portfolio_snapshot_from_dict,
     portfolio_vs_benchmark_from_dict,
     transaction_from_dict,
+    transactions_summary_from_dict,
 )
 from personalcapital2.parsers import (
     extract_categories,
     parse_account_balances,
+    parse_account_summaries,
     parse_accounts,
+    parse_accounts_summary,
     parse_benchmark_performance,
     parse_holdings,
+    parse_holdings_total,
     parse_investment_performance,
+    parse_market_quotes,
     parse_net_worth,
+    parse_net_worth_summary,
+    parse_portfolio_snapshot,
     parse_portfolio_vs_benchmark,
     parse_transactions,
+    parse_transactions_summary,
 )
 from personalcapital2.types import TwoFactorMode
 
@@ -173,14 +184,18 @@ class EmpowerClient:
 
     # --- Convenience Methods ---
 
-    def get_accounts(self) -> list[Account]:
-        """Fetch all linked accounts."""
+    def get_accounts(self) -> AccountsResult:
+        """Fetch all linked accounts with aggregate summary."""
         response = self.fetch("/newaccount/getAccounts2")
         rows = parse_accounts(response)
-        return [account_from_dict(r) for r in rows]
+        summary_dict = parse_accounts_summary(response)
+        return AccountsResult(
+            accounts=tuple(account_from_dict(r) for r in rows),
+            summary=accounts_summary_from_dict(summary_dict),
+        )
 
-    def get_transactions(self, start: date, end: date) -> list[Transaction]:
-        """Fetch transactions within a date range."""
+    def get_transactions(self, start: date, end: date) -> TransactionsResult:
+        """Fetch transactions within a date range with categories and summary."""
         response = self.fetch(
             "/transaction/getUserTransactions",
             {
@@ -193,28 +208,17 @@ class EmpowerClient:
                 "component": "DATAGRID",
             },
         )
-        rows = parse_transactions(response)
-        return [transaction_from_dict(r) for r in rows]
-
-    def get_categories(self, start: date, end: date) -> list[Category]:
-        """Extract unique transaction categories from a date range."""
-        response = self.fetch(
-            "/transaction/getUserTransactions",
-            {
-                "sort_cols": "transactionTime",
-                "sort_rev": "true",
-                "page": "0",
-                "rows_per_page": "-1",
-                "startDate": start.isoformat(),
-                "endDate": end.isoformat(),
-                "component": "DATAGRID",
-            },
+        txn_rows = parse_transactions(response)
+        cat_rows = extract_categories(response)
+        summary_dict = parse_transactions_summary(response)
+        return TransactionsResult(
+            transactions=tuple(transaction_from_dict(r) for r in txn_rows),
+            categories=tuple(category_from_dict(r) for r in cat_rows),
+            summary=transactions_summary_from_dict(summary_dict),
         )
-        rows = extract_categories(response)
-        return [category_from_dict(r) for r in rows]
 
-    def get_holdings(self) -> list[Holding]:
-        """Fetch current investment holdings."""
+    def get_holdings(self) -> HoldingsResult:
+        """Fetch current investment holdings with total value."""
         response = self.fetch(
             "/invest/getHoldings",
             {
@@ -225,10 +229,14 @@ class EmpowerClient:
         )
         today = date.today().isoformat()
         rows = parse_holdings(response, snapshot_date=today)
-        return [holding_from_dict(r) for r in rows]
+        total = parse_holdings_total(response)
+        return HoldingsResult(
+            holdings=tuple(holding_from_dict(r) for r in rows),
+            total_value=total,
+        )
 
-    def get_net_worth(self, start: date, end: date) -> list[NetWorthEntry]:
-        """Fetch daily net worth history for a date range."""
+    def get_net_worth(self, start: date, end: date) -> NetWorthResult:
+        """Fetch daily net worth history with change summary."""
         response = self.fetch(
             "/account/getHistories",
             {
@@ -240,7 +248,11 @@ class EmpowerClient:
             },
         )
         rows = parse_net_worth(response)
-        return [net_worth_entry_from_dict(r) for r in rows]
+        summary_dict = parse_net_worth_summary(response)
+        return NetWorthResult(
+            entries=tuple(net_worth_entry_from_dict(r) for r in rows),
+            summary=net_worth_summary_from_dict(summary_dict),
+        )
 
     def get_account_balances(self, start: date, end: date) -> list[AccountBalance]:
         """Fetch daily account balance history for a date range."""
@@ -257,60 +269,13 @@ class EmpowerClient:
         rows = parse_account_balances(response)
         return [account_balance_from_dict(r) for r in rows]
 
-    def get_investment_performance(
-        self, start: date, end: date, account_ids: list[int]
-    ) -> list[InvestmentPerformance]:
-        """Fetch daily cumulative investment performance for specific accounts.
+    def get_performance(self, start: date, end: date, account_ids: list[int]) -> PerformanceResult:
+        """Fetch investment performance, benchmarks, and account summaries.
 
         Args:
             start: Start date for the performance window.
             end: End date for the performance window.
             account_ids: List of investment account userAccountIds.
-        """
-        response = self.fetch(
-            "/account/getPerformanceHistories",
-            {
-                "startDate": start.isoformat(),
-                "endDate": end.isoformat(),
-                "interval": "DAY",
-                "requireBenchmark": "true",
-                "userAccountIds": json.dumps(account_ids),
-            },
-        )
-        rows = parse_investment_performance(response)
-        return [investment_performance_from_dict(r) for r in rows]
-
-    def get_benchmark_performance(
-        self, start: date, end: date, account_ids: list[int]
-    ) -> list[BenchmarkPerformance]:
-        """Fetch daily cumulative benchmark performance for specific accounts.
-
-        Args:
-            start: Start date for the performance window.
-            end: End date for the performance window.
-            account_ids: List of investment account userAccountIds.
-        """
-        response = self.fetch(
-            "/account/getPerformanceHistories",
-            {
-                "startDate": start.isoformat(),
-                "endDate": end.isoformat(),
-                "interval": "DAY",
-                "requireBenchmark": "true",
-                "userAccountIds": json.dumps(account_ids),
-            },
-        )
-        rows = parse_benchmark_performance(response)
-        return [benchmark_performance_from_dict(r) for r in rows]
-
-    def get_performance_and_benchmarks(
-        self, start: date, end: date, account_ids: list[int]
-    ) -> tuple[list[InvestmentPerformance], list[BenchmarkPerformance]]:
-        """Fetch investment and benchmark performance in a single API call.
-
-        More efficient than calling ``get_investment_performance()`` and
-        ``get_benchmark_performance()`` separately — both parse from the
-        same ``getPerformanceHistories`` endpoint.
         """
         response = self.fetch(
             "/account/getPerformanceHistories",
@@ -324,13 +289,15 @@ class EmpowerClient:
         )
         inv_rows = parse_investment_performance(response)
         bench_rows = parse_benchmark_performance(response)
-        return (
-            [investment_performance_from_dict(r) for r in inv_rows],
-            [benchmark_performance_from_dict(r) for r in bench_rows],
+        summary_rows = parse_account_summaries(response)
+        return PerformanceResult(
+            investments=tuple(investment_performance_from_dict(r) for r in inv_rows),
+            benchmarks=tuple(benchmark_performance_from_dict(r) for r in bench_rows),
+            account_summaries=tuple(account_performance_summary_from_dict(r) for r in summary_rows),
         )
 
-    def get_portfolio_vs_benchmark(self, start: date, end: date) -> list[PortfolioVsBenchmark]:
-        """Fetch daily portfolio vs S&P 500 comparison values."""
+    def get_quotes(self, start: date, end: date) -> QuotesResult:
+        """Fetch portfolio vs benchmark history, snapshot, and market quotes."""
         response = self.fetch(
             "/invest/getQuotes",
             {
@@ -342,8 +309,14 @@ class EmpowerClient:
                 "includeYOUHistory": "true",
             },
         )
-        rows = parse_portfolio_vs_benchmark(response)
-        return [portfolio_vs_benchmark_from_dict(r) for r in rows]
+        pvb_rows = parse_portfolio_vs_benchmark(response)
+        snapshot_dict = parse_portfolio_snapshot(response)
+        quote_rows = parse_market_quotes(response)
+        return QuotesResult(
+            portfolio_vs_benchmark=tuple(portfolio_vs_benchmark_from_dict(r) for r in pvb_rows),
+            snapshot=portfolio_snapshot_from_dict(snapshot_dict),
+            market_quotes=tuple(market_quote_from_dict(r) for r in quote_rows),
+        )
 
     # --- Data Fetching ---
 

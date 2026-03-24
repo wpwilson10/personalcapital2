@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import Any
 
 from personalcapital2._validation import (
@@ -26,8 +27,9 @@ _KNOWN_KEYS = frozenset(
         "holdingPercentage",
         "source",
         "costBasis",
-        "unrealizedGainLoss",
-        "unrealizedGainLossPercent",
+        "oneDayPercentChange",
+        "oneDayValueChange",
+        "feesPerYear",
         "securityType",
         "securityStyle",
         "securityClassification",
@@ -111,6 +113,15 @@ def parse_holdings(response: dict[str, Any], snapshot_date: str) -> list[dict[st
                         h.get("holdingPercentage"), "holdingPercentage"
                     ),
                     "source": h.get("source"),
+                    "cost_basis": safe_decimal_or_none(h.get("costBasis"), "costBasis"),
+                    "one_day_percent_change": safe_decimal_or_none(
+                        h.get("oneDayPercentChange"), "oneDayPercentChange"
+                    ),
+                    "one_day_value_change": safe_decimal_or_none(
+                        h.get("oneDayValueChange"), "oneDayValueChange"
+                    ),
+                    "fees_per_year": safe_decimal_or_none(h.get("feesPerYear"), "feesPerYear"),
+                    "fund_fees": safe_decimal_or_none(h.get("fundFees"), "fundFees"),
                 }
             )
         except (KeyError, ValueError, TypeError) as exc:
@@ -159,3 +170,19 @@ def parse_holdings(response: dict[str, Any], snapshot_date: str) -> list[dict[st
         log.warning("Skipped %d malformed/invalid holdings out of %d", skipped, len(raw_holdings))
     log.info("Parsed %d holdings for %s", len(deduplicated), snapshot_date)
     return deduplicated
+
+
+def parse_holdings_total(response: dict[str, Any]) -> Decimal:
+    """Extract the total holdings value from spData.
+
+    Returns:
+        The holdingsTotalValue as Decimal, or Decimal(0) if missing.
+    """
+    if not isinstance(response.get("spData"), dict):
+        log.warning("Missing spData in holdings response")
+        return Decimal(0)
+    sp_data: dict[str, Any] = response["spData"]
+    raw = sp_data.get("holdingsTotalValue")
+    if raw is None:
+        return Decimal(0)
+    return safe_decimal(raw, "holdingsTotalValue")

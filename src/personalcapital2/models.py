@@ -48,6 +48,15 @@ class Account:
     is_asset: bool
     is_closed: bool
     created_at: date | None
+    balance: Decimal | None
+    available_cash: Decimal | None
+    account_type_subtype: str | None
+    last_refreshed: date | None
+    oldest_transaction_date: date | None
+    advisory_fee_percentage: Decimal | None
+    fees_per_year: Decimal | None
+    fund_fees: Decimal | None
+    total_fee: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -67,8 +76,12 @@ class Transaction:
     category_id: int | None
     merchant: str | None
     transaction_type: str | None
+    sub_type: str | None
     status: str | None
     currency: str
+    merchant_id: str | None
+    merchant_type: str | None
+    is_duplicate: bool
 
 
 @dataclass(frozen=True)
@@ -96,6 +109,11 @@ class Holding:
     security_type: str | None
     holding_percentage: Decimal | None
     source: str | None
+    cost_basis: Decimal | None
+    one_day_percent_change: Decimal | None
+    one_day_value_change: Decimal | None
+    fees_per_year: Decimal | None
+    fund_fees: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -167,6 +185,17 @@ def account_from_dict(d: dict[str, Any]) -> Account:
         is_asset=d["is_asset"],
         is_closed=d["is_closed"],
         created_at=_parse_date_or_none(d["created_at"]),
+        balance=safe_decimal_or_none(d.get("balance"), "balance"),
+        available_cash=safe_decimal_or_none(d.get("available_cash"), "available_cash"),
+        account_type_subtype=d.get("account_type_subtype"),
+        last_refreshed=_parse_date_or_none(d.get("last_refreshed")),
+        oldest_transaction_date=_parse_date_or_none(d.get("oldest_transaction_date")),
+        advisory_fee_percentage=safe_decimal_or_none(
+            d.get("advisory_fee_percentage"), "advisory_fee_percentage"
+        ),
+        fees_per_year=safe_decimal_or_none(d.get("fees_per_year"), "fees_per_year"),
+        fund_fees=safe_decimal_or_none(d.get("fund_fees"), "fund_fees"),
+        total_fee=safe_decimal_or_none(d.get("total_fee"), "total_fee"),
     )
 
 
@@ -184,9 +213,13 @@ def transaction_from_dict(d: dict[str, Any]) -> Transaction:
         simple_description=d["simple_description"],
         category_id=d["category_id"],
         merchant=d["merchant"],
+        merchant_id=d["merchant_id"],
+        merchant_type=d["merchant_type"],
         transaction_type=d["transaction_type"],
+        sub_type=d["sub_type"],
         status=d["status"],
         currency=d["currency"],
+        is_duplicate=d["is_duplicate"],
     )
 
 
@@ -212,6 +245,15 @@ def holding_from_dict(d: dict[str, Any]) -> Holding:
         security_type=d["security_type"],
         holding_percentage=safe_decimal_or_none(d["holding_percentage"], "holdingPercentage"),
         source=d["source"],
+        cost_basis=safe_decimal_or_none(d.get("cost_basis"), "costBasis"),
+        one_day_percent_change=safe_decimal_or_none(
+            d.get("one_day_percent_change"), "oneDayPercentChange"
+        ),
+        one_day_value_change=safe_decimal_or_none(
+            d.get("one_day_value_change"), "oneDayValueChange"
+        ),
+        fees_per_year=safe_decimal_or_none(d.get("fees_per_year"), "feesPerYear"),
+        fund_fees=safe_decimal_or_none(d.get("fund_fees"), "fundFees"),
     )
 
 
@@ -263,3 +305,283 @@ def portfolio_vs_benchmark_from_dict(d: dict[str, Any]) -> PortfolioVsBenchmark:
         portfolio_value=safe_decimal_or_none(d["portfolio_value"], "portfolio_value"),
         sp500_value=safe_decimal_or_none(d["sp500_value"], "sp500_value"),
     )
+
+
+# --- Summary models ---
+
+
+@dataclass(frozen=True)
+class AccountsSummary:
+    """Aggregate totals across all linked accounts."""
+
+    networth: Decimal
+    assets: Decimal
+    liabilities: Decimal
+    cash_total: Decimal
+    investment_total: Decimal
+    credit_card_total: Decimal
+    mortgage_total: Decimal
+    loan_total: Decimal
+    other_asset_total: Decimal
+    other_liabilities_total: Decimal
+
+
+@dataclass(frozen=True)
+class TransactionsSummary:
+    """Aggregate transaction totals for a date range."""
+
+    money_in: Decimal
+    money_out: Decimal
+    net_cashflow: Decimal
+    average_in: Decimal
+    average_out: Decimal
+    start_date: date
+    end_date: date
+
+
+@dataclass(frozen=True)
+class NetWorthSummary:
+    """Change summary for net worth over a date range."""
+
+    date_range_change: Decimal
+    date_range_percentage_change: Decimal
+    cash_change: Decimal
+    cash_percentage_change: Decimal
+    investment_change: Decimal
+    investment_percentage_change: Decimal
+    credit_change: Decimal
+    credit_percentage_change: Decimal
+    mortgage_change: Decimal
+    mortgage_percentage_change: Decimal
+    loan_change: Decimal
+    loan_percentage_change: Decimal
+    other_assets_change: Decimal
+    other_assets_percentage_change: Decimal
+    other_liabilities_change: Decimal
+    other_liabilities_percentage_change: Decimal
+
+
+@dataclass(frozen=True)
+class AccountPerformanceSummary:
+    """Performance summary for a single account over a date range."""
+
+    user_account_id: int
+    account_name: str
+    site_name: str
+    current_balance: Decimal
+    percent_of_total: Decimal
+    income: Decimal
+    expense: Decimal
+    cash_flow: Decimal
+    one_day_balance_value_change: Decimal
+    one_day_balance_percentage_change: Decimal
+    date_range_balance_value_change: Decimal
+    date_range_balance_percentage_change: Decimal
+    date_range_performance_value_change: Decimal
+    one_day_performance_value_change: Decimal
+    balance_as_of_end_date: Decimal
+    closed_date: date | None
+
+
+@dataclass(frozen=True)
+class PortfolioSnapshot:
+    """Latest portfolio summary values."""
+
+    last: Decimal
+    change: Decimal
+    percent_change: Decimal
+
+
+@dataclass(frozen=True)
+class MarketQuote:
+    """A single market index or benchmark quote."""
+
+    ticker: str
+    last: Decimal
+    change: Decimal
+    percent_change: Decimal
+    long_name: str
+    date: date
+
+
+# --- Summary converters ---
+
+
+def accounts_summary_from_dict(d: dict[str, Any]) -> AccountsSummary:
+    return AccountsSummary(
+        networth=safe_decimal(d.get("networth", 0), "networth"),
+        assets=safe_decimal(d.get("assets", 0), "assets"),
+        liabilities=safe_decimal(d.get("liabilities", 0), "liabilities"),
+        cash_total=safe_decimal(d.get("cash_total", 0), "cash_total"),
+        investment_total=safe_decimal(d.get("investment_total", 0), "investment_total"),
+        credit_card_total=safe_decimal(d.get("credit_card_total", 0), "credit_card_total"),
+        mortgage_total=safe_decimal(d.get("mortgage_total", 0), "mortgage_total"),
+        loan_total=safe_decimal(d.get("loan_total", 0), "loan_total"),
+        other_asset_total=safe_decimal(d.get("other_asset_total", 0), "other_asset_total"),
+        other_liabilities_total=safe_decimal(
+            d.get("other_liabilities_total", 0), "other_liabilities_total"
+        ),
+    )
+
+
+def transactions_summary_from_dict(d: dict[str, Any]) -> TransactionsSummary:
+    return TransactionsSummary(
+        money_in=safe_decimal(d.get("money_in", 0), "money_in"),
+        money_out=safe_decimal(d.get("money_out", 0), "money_out"),
+        net_cashflow=safe_decimal(d.get("net_cashflow", 0), "net_cashflow"),
+        average_in=safe_decimal(d.get("average_in", 0), "average_in"),
+        average_out=safe_decimal(d.get("average_out", 0), "average_out"),
+        start_date=_parse_date(d["start_date"]),
+        end_date=_parse_date(d["end_date"]),
+    )
+
+
+def net_worth_summary_from_dict(d: dict[str, Any]) -> NetWorthSummary:
+    return NetWorthSummary(
+        date_range_change=safe_decimal(d.get("date_range_change", 0), "date_range_change"),
+        date_range_percentage_change=safe_decimal(
+            d.get("date_range_percentage_change", 0), "date_range_percentage_change"
+        ),
+        cash_change=safe_decimal(d.get("cash_change", 0), "cash_change"),
+        cash_percentage_change=safe_decimal(
+            d.get("cash_percentage_change", 0), "cash_percentage_change"
+        ),
+        investment_change=safe_decimal(d.get("investment_change", 0), "investment_change"),
+        investment_percentage_change=safe_decimal(
+            d.get("investment_percentage_change", 0), "investment_percentage_change"
+        ),
+        credit_change=safe_decimal(d.get("credit_change", 0), "credit_change"),
+        credit_percentage_change=safe_decimal(
+            d.get("credit_percentage_change", 0), "credit_percentage_change"
+        ),
+        mortgage_change=safe_decimal(d.get("mortgage_change", 0), "mortgage_change"),
+        mortgage_percentage_change=safe_decimal(
+            d.get("mortgage_percentage_change", 0), "mortgage_percentage_change"
+        ),
+        loan_change=safe_decimal(d.get("loan_change", 0), "loan_change"),
+        loan_percentage_change=safe_decimal(
+            d.get("loan_percentage_change", 0), "loan_percentage_change"
+        ),
+        other_assets_change=safe_decimal(d.get("other_assets_change", 0), "other_assets_change"),
+        other_assets_percentage_change=safe_decimal(
+            d.get("other_assets_percentage_change", 0), "other_assets_percentage_change"
+        ),
+        other_liabilities_change=safe_decimal(
+            d.get("other_liabilities_change", 0), "other_liabilities_change"
+        ),
+        other_liabilities_percentage_change=safe_decimal(
+            d.get("other_liabilities_percentage_change", 0),
+            "other_liabilities_percentage_change",
+        ),
+    )
+
+
+def account_performance_summary_from_dict(d: dict[str, Any]) -> AccountPerformanceSummary:
+    closed = d.get("closed_date")
+    return AccountPerformanceSummary(
+        user_account_id=d["user_account_id"],
+        account_name=d["account_name"],
+        site_name=d["site_name"],
+        current_balance=safe_decimal(d["current_balance"], "current_balance"),
+        percent_of_total=safe_decimal(d["percent_of_total"], "percent_of_total"),
+        income=safe_decimal(d.get("income", 0), "income"),
+        expense=safe_decimal(d.get("expense", 0), "expense"),
+        cash_flow=safe_decimal(d.get("cash_flow", 0), "cash_flow"),
+        one_day_balance_value_change=safe_decimal(
+            d.get("one_day_balance_value_change", 0), "one_day_balance_value_change"
+        ),
+        one_day_balance_percentage_change=safe_decimal(
+            d.get("one_day_balance_percentage_change", 0), "one_day_balance_percentage_change"
+        ),
+        date_range_balance_value_change=safe_decimal(
+            d.get("date_range_balance_value_change", 0), "date_range_balance_value_change"
+        ),
+        date_range_balance_percentage_change=safe_decimal(
+            d.get("date_range_balance_percentage_change", 0),
+            "date_range_balance_percentage_change",
+        ),
+        date_range_performance_value_change=safe_decimal(
+            d.get("date_range_performance_value_change", 0),
+            "date_range_performance_value_change",
+        ),
+        one_day_performance_value_change=safe_decimal(
+            d.get("one_day_performance_value_change", 0), "one_day_performance_value_change"
+        ),
+        balance_as_of_end_date=safe_decimal(
+            d.get("balance_as_of_end_date", 0), "balance_as_of_end_date"
+        ),
+        closed_date=_parse_date_or_none(closed) if closed else None,
+    )
+
+
+def portfolio_snapshot_from_dict(d: dict[str, Any]) -> PortfolioSnapshot:
+    return PortfolioSnapshot(
+        last=safe_decimal(d["last"], "last"),
+        change=safe_decimal(d["change"], "change"),
+        percent_change=safe_decimal(d["percent_change"], "percent_change"),
+    )
+
+
+def market_quote_from_dict(d: dict[str, Any]) -> MarketQuote:
+    return MarketQuote(
+        ticker=d["ticker"],
+        last=safe_decimal(d["last"], "last"),
+        change=safe_decimal(d["change"], "change"),
+        percent_change=safe_decimal(d["percent_change"], "percent_change"),
+        long_name=d["long_name"],
+        date=_parse_date(d["date"]),
+    )
+
+
+# --- Response containers ---
+
+
+@dataclass(frozen=True)
+class AccountsResult:
+    """Response container for get_accounts()."""
+
+    accounts: tuple[Account, ...]
+    summary: AccountsSummary
+
+
+@dataclass(frozen=True)
+class TransactionsResult:
+    """Response container for get_transactions()."""
+
+    transactions: tuple[Transaction, ...]
+    categories: tuple[Category, ...]
+    summary: TransactionsSummary
+
+
+@dataclass(frozen=True)
+class HoldingsResult:
+    """Response container for get_holdings()."""
+
+    holdings: tuple[Holding, ...]
+    total_value: Decimal
+
+
+@dataclass(frozen=True)
+class NetWorthResult:
+    """Response container for get_net_worth()."""
+
+    entries: tuple[NetWorthEntry, ...]
+    summary: NetWorthSummary
+
+
+@dataclass(frozen=True)
+class PerformanceResult:
+    """Response container for get_performance()."""
+
+    investments: tuple[InvestmentPerformance, ...]
+    benchmarks: tuple[BenchmarkPerformance, ...]
+    account_summaries: tuple[AccountPerformanceSummary, ...]
+
+
+@dataclass(frozen=True)
+class QuotesResult:
+    """Response container for get_quotes()."""
+
+    portfolio_vs_benchmark: tuple[PortfolioVsBenchmark, ...]
+    snapshot: PortfolioSnapshot
+    market_quotes: tuple[MarketQuote, ...]

@@ -1,8 +1,13 @@
 """Tests for the history parser."""
 
 from decimal import Decimal
+from typing import Any
 
-from personalcapital2.parsers.history import parse_account_balances, parse_net_worth
+from personalcapital2.parsers.history import (
+    parse_account_balances,
+    parse_net_worth,
+    parse_net_worth_summary,
+)
 
 
 def test_parse_net_worth() -> None:
@@ -98,3 +103,44 @@ def test_empty_histories() -> None:
     response: dict[str, object] = {"spData": {"networthHistories": [], "histories": []}}
     assert parse_net_worth(response, "2026-03-14T10:00:00") == []
     assert parse_account_balances(response, "2026-03-14T10:00:00") == []
+
+
+# --- parse_net_worth_summary ---
+
+
+def test_parse_net_worth_summary() -> None:
+    response: dict[str, Any] = {
+        "spData": {
+            "networthSummary": {
+                "dateRangeChange": 15000.50,
+                "dateRangePercentageChange": 1.92,
+                "dateRangeCashChange": 2000.00,
+                "dateRangeCashPercentageChange": 0.25,
+                "dateRangeInvestmentChange": 13000.50,
+                "dateRangeInvestmentPercentageChange": 1.68,
+                "dateRangeCreditChange": -100.00,
+                "dateRangeCreditPercentageChange": -7.94,
+                "dateRangeMortgageChange": 0.0,
+                "dateRangeMortgagePercentageChange": 0.0,
+                "dateRangeLoanChange": 0.0,
+                "dateRangeLoanPercentageChange": 0.0,
+                "dateRangeOtherAssetsChange": 0.0,
+                "dateRangeOtherAssetsPercentageChange": 0.0,
+                "dateRangeOtherLiabilitiesChange": 0.0,
+                "dateRangeOtherLiabilitiesPercentageChange": 0.0,
+            },
+            "networthHistories": [],
+        }
+    }
+    result = parse_net_worth_summary(response)
+    assert result["date_range_change"] == 15000.50
+    assert result["date_range_percentage_change"] == 1.92
+    assert result["cash_change"] == 2000.00
+    assert result["investment_change"] == 13000.50
+    assert result["credit_change"] == -100.00
+
+
+def test_parse_net_worth_summary_missing() -> None:
+    response: dict[str, object] = {"spData": {"networthHistories": []}}
+    result = parse_net_worth_summary(response)
+    assert result == {}

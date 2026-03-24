@@ -26,7 +26,10 @@ _KNOWN_KEYS = frozenset(
         "categoryName",
         "categoryType",
         "merchant",
+        "merchantId",
+        "merchantType",
         "transactionType",
+        "subType",
         "status",
         "currency",
         "isDuplicate",
@@ -136,9 +139,13 @@ def parse_transactions(response: dict[str, Any], synced_at: str = "") -> list[di
                     "simple_description": txn.get("simpleDescription"),
                     "category_id": txn.get("categoryId"),
                     "merchant": txn.get("merchant"),
+                    "merchant_id": txn.get("merchantId"),
+                    "merchant_type": txn.get("merchantType"),
                     "transaction_type": txn.get("transactionType"),
+                    "sub_type": txn.get("subType"),
                     "status": txn.get("status"),
                     "currency": txn.get("currency", "USD"),
+                    "is_duplicate": txn.get("isDuplicate", False),
                 }
             )
         except (KeyError, ValueError, TypeError) as exc:
@@ -149,3 +156,24 @@ def parse_transactions(response: dict[str, Any], synced_at: str = "") -> list[di
         log.warning("Skipped %d malformed transactions out of %d", skipped, len(raw_txns))
     log.info("Parsed %d transactions", len(rows))
     return rows
+
+
+def parse_transactions_summary(response: dict[str, Any]) -> dict[str, Any]:
+    """Extract transaction summary totals from spData top-level fields.
+
+    Returns:
+        Dict with normalized keys for TransactionsSummary.
+    """
+    if not isinstance(response.get("spData"), dict):
+        log.warning("Missing spData in transactions response")
+        return {}
+    sp_data: dict[str, Any] = response["spData"]
+    return {
+        "money_in": sp_data.get("moneyIn", 0),
+        "money_out": sp_data.get("moneyOut", 0),
+        "net_cashflow": sp_data.get("netCashflow", 0),
+        "average_in": sp_data.get("averageIn", 0),
+        "average_out": sp_data.get("averageOut", 0),
+        "start_date": sp_data.get("startDate", ""),
+        "end_date": sp_data.get("endDate", ""),
+    }

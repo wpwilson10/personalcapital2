@@ -1,6 +1,8 @@
 """Tests for the accounts parser."""
 
-from personalcapital2.parsers.accounts import parse_accounts
+from typing import Any
+
+from personalcapital2.parsers.accounts import parse_accounts, parse_accounts_summary
 
 
 def _make_response(accounts: list[dict[str, object]]) -> dict[str, object]:
@@ -137,3 +139,40 @@ def test_account_id_defaults_to_empty_string() -> None:
 def test_missing_sp_data() -> None:
     rows = parse_accounts({}, "2026-03-14T10:00:00")
     assert rows == []
+
+
+# --- parse_accounts_summary ---
+
+
+def test_parse_accounts_summary() -> None:
+    response: dict[str, Any] = {
+        "spData": {
+            "networth": 789760.45,
+            "assets": 791020.76,
+            "liabilities": 1260.32,
+            "cashAccountsTotal": 16762.64,
+            "investmentAccountsTotal": 774258.12,
+            "creditCardAccountsTotal": 1260.32,
+            "mortgageAccountsTotal": 0.0,
+            "loanAccountsTotal": 0.0,
+            "otherAssetAccountsTotal": 0.0,
+            "otherLiabilitiesAccountsTotal": 0.0,
+            "accounts": [],
+        }
+    }
+    result = parse_accounts_summary(response)
+    assert result["networth"] == 789760.45
+    assert result["assets"] == 791020.76
+    assert result["liabilities"] == 1260.32
+    assert result["cash_total"] == 16762.64
+    assert result["investment_total"] == 774258.12
+    assert result["credit_card_total"] == 1260.32
+    assert result["mortgage_total"] == 0.0
+    assert result["loan_total"] == 0.0
+    assert result["other_asset_total"] == 0.0
+    assert result["other_liabilities_total"] == 0.0
+
+
+def test_parse_accounts_summary_missing_sp_data() -> None:
+    result = parse_accounts_summary({})
+    assert result == {}

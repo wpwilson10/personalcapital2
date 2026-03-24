@@ -194,3 +194,39 @@ def parse_account_balances(response: dict[str, Any], synced_at: str = "") -> lis
         log.info("Filtered out %d leading zero-balance rows", total_skipped)
     log.info("Parsed %d account balance daily entries", len(rows))
     return rows
+
+
+def parse_net_worth_summary(response: dict[str, Any]) -> dict[str, Any]:
+    """Extract net worth change summary from spData.networthSummary.
+
+    Returns:
+        Dict with normalized keys for NetWorthSummary.
+    """
+    if not isinstance(response.get("spData"), dict):
+        log.warning("Missing spData in history response")
+        return {}
+    sp_data: dict[str, Any] = response["spData"]
+    if not isinstance(sp_data.get("networthSummary"), dict):
+        log.warning("Missing networthSummary in history response")
+        return {}
+    nw_summary: dict[str, Any] = sp_data["networthSummary"]
+    return {
+        "date_range_change": nw_summary.get("dateRangeChange", 0),
+        "date_range_percentage_change": nw_summary.get("dateRangePercentageChange", 0),
+        "cash_change": nw_summary.get("dateRangeCashChange", 0),
+        "cash_percentage_change": nw_summary.get("dateRangeCashPercentageChange", 0),
+        "investment_change": nw_summary.get("dateRangeInvestmentChange", 0),
+        "investment_percentage_change": nw_summary.get("dateRangeInvestmentPercentageChange", 0),
+        "credit_change": nw_summary.get("dateRangeCreditChange", 0),
+        "credit_percentage_change": nw_summary.get("dateRangeCreditPercentageChange", 0),
+        "mortgage_change": nw_summary.get("dateRangeMortgageChange", 0),
+        "mortgage_percentage_change": nw_summary.get("dateRangeMortgagePercentageChange", 0),
+        "loan_change": nw_summary.get("dateRangeLoanChange", 0),
+        "loan_percentage_change": nw_summary.get("dateRangeLoanPercentageChange", 0),
+        "other_assets_change": nw_summary.get("dateRangeOtherAssetsChange", 0),
+        "other_assets_percentage_change": nw_summary.get("dateRangeOtherAssetsPercentageChange", 0),
+        "other_liabilities_change": nw_summary.get("dateRangeOtherLiabilitiesChange", 0),
+        "other_liabilities_percentage_change": nw_summary.get(
+            "dateRangeOtherLiabilitiesPercentageChange", 0
+        ),
+    }

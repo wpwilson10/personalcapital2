@@ -3,6 +3,7 @@
 from decimal import Decimal
 
 from personalcapital2.parsers.performance import (
+    parse_account_summaries,
     parse_benchmark_performance,
     parse_investment_performance,
 )
@@ -82,3 +83,56 @@ def test_empty_performance() -> None:
     }
     assert parse_investment_performance(response, "2026-03-14T10:00:00") == []
     assert parse_benchmark_performance(response, "2026-03-14T10:00:00") == []
+
+
+# --- parse_account_summaries ---
+
+
+def test_parse_account_summaries() -> None:
+    response = {
+        "spData": {
+            "accountSummaries": [
+                {
+                    "userAccountId": 305886794,
+                    "accountName": "Brokerage",
+                    "siteName": "Vanguard",
+                    "currentBalance": 150000.0,
+                    "percentOfTotal": 75.5,
+                    "income": 1200.0,
+                    "expense": 50.0,
+                    "cashFlow": 1150.0,
+                    "oneDayBalanceValueChange": -500.0,
+                    "oneDayBalancePercentageChange": -0.33,
+                    "dateRangeBalanceValueChange": 10000.0,
+                    "dateRangeBalancePercentageChange": 7.14,
+                    "dateRangePerformanceValueChange": 8500.0,
+                    "oneDayPerformanceValueChange": -450.0,
+                    "balanceAsOfEndDate": 150000.0,
+                    "closedDate": "",
+                }
+            ],
+            "performanceHistory": [],
+        }
+    }
+    rows = parse_account_summaries(response)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["user_account_id"] == 305886794
+    assert row["account_name"] == "Brokerage"
+    assert row["site_name"] == "Vanguard"
+    assert row["current_balance"] == 150000.0
+    assert row["percent_of_total"] == 75.5
+    assert row["income"] == 1200.0
+    assert row["expense"] == 50.0
+    assert row["cash_flow"] == 1150.0
+    assert row["one_day_balance_value_change"] == -500.0
+    assert row["date_range_balance_value_change"] == 10000.0
+    assert row["date_range_performance_value_change"] == 8500.0
+    assert row["balance_as_of_end_date"] == 150000.0
+    assert row["closed_date"] is None
+
+
+def test_parse_account_summaries_empty() -> None:
+    response: dict[str, object] = {"spData": {"performanceHistory": []}}
+    rows = parse_account_summaries(response)
+    assert rows == []

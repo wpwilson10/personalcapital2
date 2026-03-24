@@ -2,9 +2,70 @@
 
 All convenience methods return frozen dataclasses. Dates are `datetime.date`, financial values are `decimal.Decimal`, and optional fields are `None` when absent.
 
-## Account
+## Response Containers
+
+Methods return container objects that group related data from a single API call.
+
+### AccountsResult
 
 Returned by `client.get_accounts()`.
+
+| Field | Type |
+|---|---|
+| `accounts` | `tuple[Account, ...]` |
+| `summary` | `AccountsSummary` |
+
+### TransactionsResult
+
+Returned by `client.get_transactions(start, end)`.
+
+| Field | Type |
+|---|---|
+| `transactions` | `tuple[Transaction, ...]` |
+| `categories` | `tuple[Category, ...]` |
+| `summary` | `TransactionsSummary` |
+
+### HoldingsResult
+
+Returned by `client.get_holdings()`.
+
+| Field | Type |
+|---|---|
+| `holdings` | `tuple[Holding, ...]` |
+| `total_value` | `Decimal` |
+
+### NetWorthResult
+
+Returned by `client.get_net_worth(start, end)`.
+
+| Field | Type |
+|---|---|
+| `entries` | `tuple[NetWorthEntry, ...]` |
+| `summary` | `NetWorthSummary` |
+
+### PerformanceResult
+
+Returned by `client.get_performance(start, end, account_ids)`.
+
+| Field | Type |
+|---|---|
+| `investments` | `tuple[InvestmentPerformance, ...]` |
+| `benchmarks` | `tuple[BenchmarkPerformance, ...]` |
+| `account_summaries` | `tuple[AccountPerformanceSummary, ...]` |
+
+### QuotesResult
+
+Returned by `client.get_quotes(start, end)`.
+
+| Field | Type |
+|---|---|
+| `portfolio_vs_benchmark` | `tuple[PortfolioVsBenchmark, ...]` |
+| `snapshot` | `PortfolioSnapshot` |
+| `market_quotes` | `tuple[MarketQuote, ...]` |
+
+## Data Models
+
+### Account
 
 | Field | Type |
 |---|---|
@@ -19,10 +80,17 @@ Returned by `client.get_accounts()`.
 | `is_asset` | `bool` |
 | `is_closed` | `bool` |
 | `created_at` | `date \| None` |
+| `balance` | `Decimal \| None` |
+| `available_cash` | `Decimal \| None` |
+| `account_type_subtype` | `str \| None` |
+| `last_refreshed` | `date \| None` |
+| `oldest_transaction_date` | `date \| None` |
+| `advisory_fee_percentage` | `Decimal \| None` |
+| `fees_per_year` | `Decimal \| None` |
+| `fund_fees` | `Decimal \| None` |
+| `total_fee` | `Decimal \| None` |
 
-## Transaction
-
-Returned by `client.get_transactions(start, end)`.
+### Transaction
 
 | Field | Type |
 |---|---|
@@ -38,13 +106,15 @@ Returned by `client.get_transactions(start, end)`.
 | `simple_description` | `str \| None` |
 | `category_id` | `int \| None` |
 | `merchant` | `str \| None` |
+| `merchant_id` | `str \| None` |
+| `merchant_type` | `str \| None` |
 | `transaction_type` | `str \| None` |
+| `sub_type` | `str \| None` |
 | `status` | `str \| None` |
 | `currency` | `str` |
+| `is_duplicate` | `bool` |
 
-## Category
-
-Returned by `client.get_categories(start, end)`.
+### Category
 
 | Field | Type |
 |---|---|
@@ -52,9 +122,7 @@ Returned by `client.get_categories(start, end)`.
 | `name` | `str` |
 | `type` | `str` |
 
-## Holding
-
-Returned by `client.get_holdings()`.
+### Holding
 
 | Field | Type |
 |---|---|
@@ -70,10 +138,13 @@ Returned by `client.get_holdings()`.
 | `security_type` | `str \| None` |
 | `holding_percentage` | `Decimal \| None` |
 | `source` | `str \| None` |
+| `cost_basis` | `Decimal \| None` |
+| `one_day_percent_change` | `Decimal \| None` |
+| `one_day_value_change` | `Decimal \| None` |
+| `fees_per_year` | `Decimal \| None` |
+| `fund_fees` | `Decimal \| None` |
 
-## NetWorthEntry
-
-Returned by `client.get_net_worth(start, end)`.
+### NetWorthEntry
 
 | Field | Type |
 |---|---|
@@ -89,9 +160,9 @@ Returned by `client.get_net_worth(start, end)`.
 | `total_other_assets` | `Decimal` |
 | `total_other_liabilities` | `Decimal` |
 
-## AccountBalance
+### AccountBalance
 
-Returned by `client.get_account_balances(start, end)`.
+Returned directly by `client.get_account_balances(start, end)` (not wrapped in a container).
 
 | Field | Type |
 |---|---|
@@ -99,9 +170,7 @@ Returned by `client.get_account_balances(start, end)`.
 | `user_account_id` | `int` |
 | `balance` | `Decimal` |
 
-## InvestmentPerformance
-
-Returned by `client.get_investment_performance(start, end, account_ids)`.
+### InvestmentPerformance
 
 | Field | Type |
 |---|---|
@@ -109,9 +178,7 @@ Returned by `client.get_investment_performance(start, end, account_ids)`.
 | `user_account_id` | `int` |
 | `performance` | `Decimal \| None` |
 
-## BenchmarkPerformance
-
-Returned by `client.get_benchmark_performance(start, end, account_ids)`.
+### BenchmarkPerformance
 
 | Field | Type |
 |---|---|
@@ -119,12 +186,100 @@ Returned by `client.get_benchmark_performance(start, end, account_ids)`.
 | `benchmark` | `str` |
 | `performance` | `Decimal` |
 
-## PortfolioVsBenchmark
-
-Returned by `client.get_portfolio_vs_benchmark(start, end)`.
+### PortfolioVsBenchmark
 
 | Field | Type |
 |---|---|
 | `date` | `date` |
 | `portfolio_value` | `Decimal \| None` |
 | `sp500_value` | `Decimal \| None` |
+
+## Summary Models
+
+### AccountsSummary
+
+| Field | Type |
+|---|---|
+| `networth` | `Decimal` |
+| `assets` | `Decimal` |
+| `liabilities` | `Decimal` |
+| `cash_total` | `Decimal` |
+| `investment_total` | `Decimal` |
+| `credit_card_total` | `Decimal` |
+| `mortgage_total` | `Decimal` |
+| `loan_total` | `Decimal` |
+| `other_asset_total` | `Decimal` |
+| `other_liabilities_total` | `Decimal` |
+
+### TransactionsSummary
+
+| Field | Type |
+|---|---|
+| `money_in` | `Decimal` |
+| `money_out` | `Decimal` |
+| `net_cashflow` | `Decimal` |
+| `average_in` | `Decimal` |
+| `average_out` | `Decimal` |
+| `start_date` | `date` |
+| `end_date` | `date` |
+
+### NetWorthSummary
+
+| Field | Type |
+|---|---|
+| `date_range_change` | `Decimal` |
+| `date_range_percentage_change` | `Decimal` |
+| `cash_change` | `Decimal` |
+| `cash_percentage_change` | `Decimal` |
+| `investment_change` | `Decimal` |
+| `investment_percentage_change` | `Decimal` |
+| `credit_change` | `Decimal` |
+| `credit_percentage_change` | `Decimal` |
+| `mortgage_change` | `Decimal` |
+| `mortgage_percentage_change` | `Decimal` |
+| `loan_change` | `Decimal` |
+| `loan_percentage_change` | `Decimal` |
+| `other_assets_change` | `Decimal` |
+| `other_assets_percentage_change` | `Decimal` |
+| `other_liabilities_change` | `Decimal` |
+| `other_liabilities_percentage_change` | `Decimal` |
+
+### AccountPerformanceSummary
+
+| Field | Type |
+|---|---|
+| `user_account_id` | `int` |
+| `account_name` | `str` |
+| `site_name` | `str` |
+| `current_balance` | `Decimal` |
+| `percent_of_total` | `Decimal` |
+| `income` | `Decimal` |
+| `expense` | `Decimal` |
+| `cash_flow` | `Decimal` |
+| `one_day_balance_value_change` | `Decimal` |
+| `one_day_balance_percentage_change` | `Decimal` |
+| `date_range_balance_value_change` | `Decimal` |
+| `date_range_balance_percentage_change` | `Decimal` |
+| `date_range_performance_value_change` | `Decimal` |
+| `one_day_performance_value_change` | `Decimal` |
+| `balance_as_of_end_date` | `Decimal` |
+| `closed_date` | `date \| None` |
+
+### PortfolioSnapshot
+
+| Field | Type |
+|---|---|
+| `last` | `Decimal` |
+| `change` | `Decimal` |
+| `percent_change` | `Decimal` |
+
+### MarketQuote
+
+| Field | Type |
+|---|---|
+| `ticker` | `str` |
+| `last` | `Decimal` |
+| `change` | `Decimal` |
+| `percent_change` | `Decimal` |
+| `long_name` | `str` |
+| `date` | `date` |

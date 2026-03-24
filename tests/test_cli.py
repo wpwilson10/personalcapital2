@@ -28,13 +28,24 @@ from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
 from personalcapital2.models import (
     Account,
     AccountBalance,
+    AccountsResult,
+    AccountsSummary,
     BenchmarkPerformance,
     Category,
     Holding,
+    HoldingsResult,
     InvestmentPerformance,
+    MarketQuote,
     NetWorthEntry,
+    NetWorthResult,
+    NetWorthSummary,
+    PerformanceResult,
+    PortfolioSnapshot,
     PortfolioVsBenchmark,
+    QuotesResult,
     Transaction,
+    TransactionsResult,
+    TransactionsSummary,
 )
 
 # --- _parse_date unit tests ---
@@ -161,6 +172,15 @@ def _sample_account() -> Account:
         is_asset=True,
         is_closed=False,
         created_at=date(2024, 1, 1),
+        balance=Decimal("5000"),
+        available_cash=None,
+        account_type_subtype=None,
+        last_refreshed=None,
+        oldest_transaction_date=None,
+        advisory_fee_percentage=None,
+        fees_per_year=None,
+        fund_fees=None,
+        total_fee=None,
     )
 
 
@@ -178,9 +198,13 @@ def _sample_transaction() -> Transaction:
         simple_description="Coffee",
         category_id=3,
         merchant="Java Joe",
+        merchant_id=None,
+        merchant_type=None,
         transaction_type="Purchase",
+        sub_type=None,
         status="posted",
         currency="USD",
+        is_duplicate=False,
     )
 
 
@@ -232,9 +256,13 @@ def test_serialize_csv_none_fields() -> None:
         simple_description=None,
         category_id=None,
         merchant=None,
+        merchant_id=None,
+        merchant_type=None,
         transaction_type=None,
+        sub_type=None,
         status=None,
         currency="USD",
+        is_duplicate=False,
     )
     items: list[object] = [txn]
     result = _serialize_csv(items)
@@ -304,18 +332,72 @@ def _create_session(tmp_path: Path) -> Path:
     return session_path
 
 
+# --- Shared test fixtures ---
+
+
+def _sample_accounts_summary() -> AccountsSummary:
+    return AccountsSummary(
+        networth=Decimal("100000"),
+        assets=Decimal("120000"),
+        liabilities=Decimal("20000"),
+        cash_total=Decimal("5000"),
+        investment_total=Decimal("115000"),
+        credit_card_total=Decimal("2000"),
+        mortgage_total=Decimal("18000"),
+        loan_total=Decimal("0"),
+        other_asset_total=Decimal("0"),
+        other_liabilities_total=Decimal("0"),
+    )
+
+
+def _sample_transactions_summary() -> TransactionsSummary:
+    return TransactionsSummary(
+        money_in=Decimal("1000"),
+        money_out=Decimal("500"),
+        net_cashflow=Decimal("500"),
+        average_in=Decimal("1000"),
+        average_out=Decimal("500"),
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 31),
+    )
+
+
+def _sample_net_worth_summary() -> NetWorthSummary:
+    return NetWorthSummary(
+        date_range_change=Decimal("5000"),
+        date_range_percentage_change=Decimal("3.45"),
+        cash_change=Decimal("0"),
+        cash_percentage_change=Decimal("0"),
+        investment_change=Decimal("0"),
+        investment_percentage_change=Decimal("0"),
+        credit_change=Decimal("0"),
+        credit_percentage_change=Decimal("0"),
+        mortgage_change=Decimal("0"),
+        mortgage_percentage_change=Decimal("0"),
+        loan_change=Decimal("0"),
+        loan_percentage_change=Decimal("0"),
+        other_assets_change=Decimal("0"),
+        other_assets_percentage_change=Decimal("0"),
+        other_liabilities_change=Decimal("0"),
+        other_liabilities_percentage_change=Decimal("0"),
+    )
+
+
 # --- Command integration tests (mock EmpowerClient) ---
 
 
 def test_cmd_accounts_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = _create_session(tmp_path)
-    account = _sample_account()
+    result = AccountsResult(
+        accounts=(_sample_account(),),
+        summary=_sample_accounts_summary(),
+    )
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_accounts.return_value = [account]
+        instance.get_accounts.return_value = result
         main(["--session", str(session), "accounts"])
 
     captured = capsys.readouterr()
@@ -326,13 +408,16 @@ def test_cmd_accounts_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
 
 def test_cmd_accounts_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = _create_session(tmp_path)
-    account = _sample_account()
+    result = AccountsResult(
+        accounts=(_sample_account(),),
+        summary=_sample_accounts_summary(),
+    )
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_accounts.return_value = [account]
+        instance.get_accounts.return_value = result
         main(["--format", "csv", "--session", str(session), "accounts"])
 
     captured = capsys.readouterr()
@@ -343,13 +428,17 @@ def test_cmd_accounts_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
 
 def test_cmd_transactions_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = _create_session(tmp_path)
-    txn = _sample_transaction()
+    result = TransactionsResult(
+        transactions=(_sample_transaction(),),
+        categories=(Category(category_id=3, name="Food", type="EXPENSE"),),
+        summary=_sample_transactions_summary(),
+    )
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_transactions.return_value = [txn]
+        instance.get_transactions.return_value = result
         main(
             [
                 "--session",
@@ -370,12 +459,17 @@ def test_cmd_transactions_json(tmp_path: Path, capsys: pytest.CaptureFixture[str
 def test_cmd_categories_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = _create_session(tmp_path)
     cat = Category(category_id=7, name="Groceries", type="EXPENSE")
+    result = TransactionsResult(
+        transactions=(),
+        categories=(cat,),
+        summary=_sample_transactions_summary(),
+    )
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_categories.return_value = [cat]
+        instance.get_transactions.return_value = result
         main(["--session", str(session), "categories", "--start", "mb", "--end", "today"])
 
     captured = capsys.readouterr()
@@ -398,13 +492,19 @@ def test_cmd_holdings_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
         security_type="equity",
         holding_percentage=Decimal("0.75"),
         source="broker",
+        cost_basis=Decimal("10000"),
+        one_day_percent_change=Decimal("0.5"),
+        one_day_value_change=Decimal("62.50"),
+        fees_per_year=None,
+        fund_fees=None,
     )
+    result = HoldingsResult(holdings=(holding,), total_value=Decimal("12500"))
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_holdings.return_value = [holding]
+        instance.get_holdings.return_value = result
         main(["--session", str(session), "holdings"])
 
     captured = capsys.readouterr()
@@ -427,12 +527,13 @@ def test_cmd_net_worth_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
         total_other_assets=Decimal("0"),
         total_other_liabilities=Decimal("0"),
     )
+    result = NetWorthResult(entries=(nw,), summary=_sample_net_worth_summary())
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_net_worth.return_value = [nw]
+        instance.get_net_worth.return_value = result
         main(["--session", str(session), "net-worth", "--start", "mb", "--end", "today"])
 
     captured = capsys.readouterr()
@@ -461,12 +562,17 @@ def test_cmd_performance_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     perf = InvestmentPerformance(
         date=date(2026, 3, 15), user_account_id=300, performance=Decimal("0.0823")
     )
+    result = PerformanceResult(
+        investments=(perf,),
+        benchmarks=(),
+        account_summaries=(),
+    )
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_investment_performance.return_value = [perf]
+        instance.get_performance.return_value = result
         main(
             [
                 "--session",
@@ -491,12 +597,17 @@ def test_cmd_benchmarks_json(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     bench = BenchmarkPerformance(
         date=date(2026, 3, 15), benchmark="^INX", performance=Decimal("0.1245")
     )
+    result = PerformanceResult(
+        investments=(),
+        benchmarks=(bench,),
+        account_summaries=(),
+    )
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_benchmark_performance.return_value = [bench]
+        instance.get_performance.return_value = result
         main(
             [
                 "--session",
@@ -523,17 +634,56 @@ def test_cmd_portfolio_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
         portfolio_value=Decimal("105.5"),
         sp500_value=Decimal("103.2"),
     )
+    result = QuotesResult(
+        portfolio_vs_benchmark=(pvb,),
+        snapshot=PortfolioSnapshot(
+            last=Decimal("780000"), change=Decimal("-4500"), percent_change=Decimal("-0.58")
+        ),
+        market_quotes=(),
+    )
 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_portfolio_vs_benchmark.return_value = [pvb]
+        instance.get_quotes.return_value = result
         main(["--session", str(session), "portfolio", "--start", "mb", "--end", "today"])
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
     assert parsed[0]["portfolio_value"] == 105.5
+
+
+def test_cmd_snapshot_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    snapshot = PortfolioSnapshot(
+        last=Decimal("780000"), change=Decimal("-4500"), percent_change=Decimal("-0.58")
+    )
+    quote = MarketQuote(
+        ticker="^INX",
+        last=Decimal("6624.7"),
+        change=Decimal("-91.39"),
+        percent_change=Decimal("-1.36"),
+        long_name="S&P 500",
+        date=date(2026, 3, 15),
+    )
+    result = QuotesResult(
+        portfolio_vs_benchmark=(),
+        snapshot=snapshot,
+        market_quotes=(quote,),
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_quotes.return_value = result
+        main(["--session", str(session), "snapshot", "--start", "mb", "--end", "today"])
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed["snapshot"]["last"] == 780000
+    assert parsed["market_quotes"][0]["ticker"] == "^INX"
 
 
 def test_cmd_raw_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

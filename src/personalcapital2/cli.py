@@ -21,7 +21,10 @@ import sys
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from personalcapital2.auth import authenticate
 from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
@@ -106,14 +109,14 @@ def _json_default(obj: object) -> int | float | str:
     return str(obj)
 
 
-def _serialize_json(items: list[object]) -> str:
-    """Serialize a list of dataclass instances to JSON."""
+def _serialize_json(items: Sequence[object]) -> str:
+    """Serialize a sequence of dataclass instances to JSON."""
     rows = [dataclasses.asdict(item) for item in items]  # pyright: ignore[reportArgumentType] — items are dataclass instances
     return json.dumps(rows, default=_json_default, indent=2)
 
 
-def _serialize_csv(items: list[object]) -> str:
-    """Serialize a list of dataclass instances to CSV."""
+def _serialize_csv(items: Sequence[object]) -> str:
+    """Serialize a sequence of dataclass instances to CSV."""
     if not items:
         return ""
     fields = [f.name for f in dataclasses.fields(items[0])]  # pyright: ignore[reportArgumentType] — items are dataclass instances
@@ -126,7 +129,7 @@ def _serialize_csv(items: list[object]) -> str:
     return buf.getvalue()
 
 
-def _output(items: list[object], fmt: str) -> None:
+def _output(items: Sequence[object], fmt: str) -> None:
     """Write serialized items to stdout."""
     text = _serialize_csv(items) if fmt == "csv" else _serialize_json(items)
     if text:
@@ -208,8 +211,8 @@ def cmd_accounts(args: argparse.Namespace) -> None:
     session_path = Path(args.session)
     fmt: str = args.format
     client = _make_client(session_path)
-    accounts = client.get_accounts()
-    _output(accounts, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    result = client.get_accounts()
+    _output(result.accounts, fmt)
 
 
 def cmd_transactions(args: argparse.Namespace) -> None:
@@ -219,8 +222,8 @@ def cmd_transactions(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     client = _make_client(session_path)
-    txns = client.get_transactions(start, end)
-    _output(txns, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    result = client.get_transactions(start, end)
+    _output(result.transactions, fmt)
 
 
 def cmd_categories(args: argparse.Namespace) -> None:
@@ -230,8 +233,8 @@ def cmd_categories(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     client = _make_client(session_path)
-    cats = client.get_categories(start, end)
-    _output(cats, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    result = client.get_transactions(start, end)
+    _output(result.categories, fmt)
 
 
 def cmd_holdings(args: argparse.Namespace) -> None:
@@ -239,8 +242,8 @@ def cmd_holdings(args: argparse.Namespace) -> None:
     session_path = Path(args.session)
     fmt: str = args.format
     client = _make_client(session_path)
-    holdings = client.get_holdings()
-    _output(holdings, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    result = client.get_holdings()
+    _output(result.holdings, fmt)
 
 
 def cmd_net_worth(args: argparse.Namespace) -> None:
@@ -250,8 +253,8 @@ def cmd_net_worth(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     client = _make_client(session_path)
-    entries = client.get_net_worth(start, end)
-    _output(entries, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    result = client.get_net_worth(start, end)
+    _output(result.entries, fmt)
 
 
 def cmd_balances(args: argparse.Namespace) -> None:
@@ -262,7 +265,7 @@ def cmd_balances(args: argparse.Namespace) -> None:
     end: date = args.end
     client = _make_client(session_path)
     balances = client.get_account_balances(start, end)
-    _output(balances, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    _output(balances, fmt)
 
 
 def cmd_performance(args: argparse.Namespace) -> None:
@@ -273,8 +276,8 @@ def cmd_performance(args: argparse.Namespace) -> None:
     end: date = args.end
     account_ids: list[int] = args.account_ids
     client = _make_client(session_path)
-    perfs = client.get_investment_performance(start, end, account_ids)
-    _output(perfs, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    result = client.get_performance(start, end, account_ids)
+    _output(result.investments, fmt)
 
 
 def cmd_benchmarks(args: argparse.Namespace) -> None:
@@ -285,8 +288,8 @@ def cmd_benchmarks(args: argparse.Namespace) -> None:
     end: date = args.end
     account_ids: list[int] = args.account_ids
     client = _make_client(session_path)
-    benchmarks = client.get_benchmark_performance(start, end, account_ids)
-    _output(benchmarks, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    result = client.get_performance(start, end, account_ids)
+    _output(result.benchmarks, fmt)
 
 
 def cmd_portfolio(args: argparse.Namespace) -> None:
@@ -296,8 +299,22 @@ def cmd_portfolio(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     client = _make_client(session_path)
-    pvb = client.get_portfolio_vs_benchmark(start, end)
-    _output(pvb, fmt)  # pyright: ignore[reportArgumentType] — list covariance
+    result = client.get_quotes(start, end)
+    _output(result.portfolio_vs_benchmark, fmt)
+
+
+def cmd_snapshot(args: argparse.Namespace) -> None:
+    """Output portfolio snapshot and market quotes as JSON."""
+    session_path = Path(args.session)
+    start: date = args.start
+    end: date = args.end
+    client = _make_client(session_path)
+    result = client.get_quotes(start, end)
+    output = {
+        "snapshot": dataclasses.asdict(result.snapshot),
+        "market_quotes": [dataclasses.asdict(q) for q in result.market_quotes],
+    }
+    sys.stdout.write(json.dumps(output, default=_json_default, indent=2) + "\n")
 
 
 def cmd_raw(args: argparse.Namespace) -> None:
@@ -409,6 +426,10 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio_p = sub.add_parser("portfolio", help="portfolio vs S&P 500")
     _add_date_args(portfolio_p)
     portfolio_p.set_defaults(func=cmd_portfolio)
+
+    snapshot_p = sub.add_parser("snapshot", help="portfolio snapshot + market quotes (JSON)")
+    _add_date_args(snapshot_p)
+    snapshot_p.set_defaults(func=cmd_snapshot)
 
     # Data commands (with date args + account IDs)
     performance_p = sub.add_parser("performance", help="daily investment performance")

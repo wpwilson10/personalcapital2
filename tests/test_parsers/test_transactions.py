@@ -3,7 +3,11 @@
 from decimal import Decimal
 from typing import Any
 
-from personalcapital2.parsers.transactions import extract_categories, parse_transactions
+from personalcapital2.parsers.transactions import (
+    extract_categories,
+    parse_transactions,
+    parse_transactions_summary,
+)
 
 
 def _make_response(transactions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -26,9 +30,13 @@ SAMPLE_TXN = {
     "categoryName": "Travel",
     "categoryType": "EXPENSE",
     "merchant": "Uber",
+    "merchantId": "abc123",
+    "merchantType": "RIDE_SHARE",
     "transactionType": "Payment",
+    "subType": "debit",
     "status": "posted",
     "currency": "USD",
+    "isDuplicate": False,
 }
 
 
@@ -44,6 +52,29 @@ def test_parse_transaction() -> None:
     assert row["is_spending"] is True
     assert row["description"] == "Uber"
     assert row["category_id"] == 39
+    assert row["merchant_id"] == "abc123"
+    assert row["merchant_type"] == "RIDE_SHARE"
+    assert row["sub_type"] == "debit"
+    assert row["is_duplicate"] is False
+
+
+def test_parse_transaction_missing_optional_new_fields() -> None:
+    """Transactions missing merchantId/merchantType/subType get None; isDuplicate defaults False."""
+    minimal_txn = {
+        "userTransactionId": 100099,
+        "userAccountId": 123,
+        "transactionDate": "2026-01-15",
+        "amount": 10.0,
+        "description": "Test",
+    }
+    response = _make_response([minimal_txn])
+    rows = parse_transactions(response)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["merchant_id"] is None
+    assert row["merchant_type"] is None
+    assert row["sub_type"] is None
+    assert row["is_duplicate"] is False
 
 
 def test_extract_categories_deduplicates() -> None:
@@ -103,3 +134,34 @@ def test_empty_transactions() -> None:
     response = _make_response([])
     assert parse_transactions(response, "2026-03-14T10:00:00") == []
     assert extract_categories(response) == []
+
+
+# --- parse_transactions_summary ---
+
+
+def test_parse_transactions_summary() -> None:
+    response: dict[str, Any] = {
+        "spData": {
+            "moneyIn": 5000.00,
+            "moneyOut": 3200.50,
+            "netCashflow": 1799.50,
+            "averageIn": 2500.00,
+            "averageOut": 1600.25,
+            "startDate": "2026-01-01",
+            "endDate": "2026-03-14",
+            "transactions": [],
+        }
+    }
+    result = parse_transactions_summary(response)
+    assert result["money_in"] == 5000.00
+    assert result["money_out"] == 3200.50
+    assert result["net_cashflow"] == 1799.50
+    assert result["average_in"] == 2500.00
+    assert result["average_out"] == 1600.25
+    assert result["start_date"] == "2026-01-01"
+    assert result["end_date"] == "2026-03-14"
+
+
+def test_parse_transactions_summary_missing_sp_data() -> None:
+    result = parse_transactions_summary({})
+    assert result == {}

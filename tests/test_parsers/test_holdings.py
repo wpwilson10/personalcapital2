@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from personalcapital2.parsers.holdings import parse_holdings
+from personalcapital2.parsers.holdings import parse_holdings, parse_holdings_total
 
 
 def _make_response(holdings: list[dict[str, object]]) -> dict[str, object]:
@@ -105,3 +105,23 @@ def test_holdings_with_all_empty_identifiers_skipped() -> None:
 
 def test_empty_holdings() -> None:
     assert parse_holdings(_make_response([]), "2026-03-14") == []
+
+
+# --- parse_holdings_total ---
+
+
+def test_parse_holdings_total() -> None:
+    response: dict[str, object] = {
+        "spData": {
+            "holdingsTotalValue": 123456.78,
+            "holdings": [],
+        }
+    }
+    result = parse_holdings_total(response)
+    assert result == Decimal("123456.78")
+
+
+def test_parse_holdings_total_missing() -> None:
+    response: dict[str, object] = {"spData": {"holdings": []}}
+    result = parse_holdings_total(response)
+    assert result == Decimal(0)

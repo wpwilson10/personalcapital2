@@ -14,13 +14,25 @@ from personalcapital2.exceptions import EmpowerAPIError
 from personalcapital2.models import (
     Account,
     AccountBalance,
+    AccountPerformanceSummary,
+    AccountsResult,
+    AccountsSummary,
     BenchmarkPerformance,
     Category,
     Holding,
+    HoldingsResult,
     InvestmentPerformance,
+    MarketQuote,
     NetWorthEntry,
+    NetWorthResult,
+    NetWorthSummary,
+    PerformanceResult,
+    PortfolioSnapshot,
     PortfolioVsBenchmark,
+    QuotesResult,
     Transaction,
+    TransactionsResult,
+    TransactionsSummary,
 )
 
 
@@ -63,21 +75,38 @@ def test_get_accounts_happy_path() -> None:
                         "currency": "USD",
                         "isAsset": True,
                         "createdDate": 1700000000000,
+                        "balance": 5000.0,
                     }
-                ]
+                ],
+                "networth": 100000.0,
+                "assets": 120000.0,
+                "liabilities": 20000.0,
+                "cashAccountsTotal": 5000.0,
+                "investmentAccountsTotal": 115000.0,
+                "creditCardAccountsTotal": 2000.0,
+                "mortgageAccountsTotal": 18000.0,
+                "loanAccountsTotal": 0.0,
+                "otherAssetAccountsTotal": 0.0,
+                "otherLiabilitiesAccountsTotal": 0.0,
             }
         ),
     )
     client = _make_client()
-    accounts = client.get_accounts()
+    result = client.get_accounts()
 
-    assert len(accounts) == 1
-    assert isinstance(accounts[0], Account)
-    assert accounts[0].user_account_id == 100
-    assert accounts[0].name == "Checking"
-    assert accounts[0].is_asset is True
-    assert accounts[0].is_closed is False
-    assert isinstance(accounts[0].created_at, date)
+    assert isinstance(result, AccountsResult)
+    assert len(result.accounts) == 1
+    assert isinstance(result.accounts[0], Account)
+    assert result.accounts[0].user_account_id == 100
+    assert result.accounts[0].name == "Checking"
+    assert result.accounts[0].is_asset is True
+    assert result.accounts[0].is_closed is False
+    assert isinstance(result.accounts[0].created_at, date)
+    assert result.accounts[0].balance == Decimal("5000")
+
+    assert isinstance(result.summary, AccountsSummary)
+    assert result.summary.networth == Decimal("100000")
+    assert result.summary.assets == Decimal("120000")
 
 
 @responses.activate
@@ -87,7 +116,8 @@ def test_get_accounts_empty() -> None:
         json=_success_response({"accounts": []}),
     )
     client = _make_client()
-    assert client.get_accounts() == []
+    result = client.get_accounts()
+    assert result.accounts == ()
 
 
 @responses.activate
@@ -123,30 +153,59 @@ def test_get_transactions_happy_path() -> None:
                         "originalDescription": "COFFEE SHOP #99",
                         "simpleDescription": "Coffee",
                         "categoryId": 3,
+                        "categoryName": "Food",
+                        "categoryType": "EXPENSE",
                         "merchant": "Java Joe",
                         "transactionType": "Purchase",
                         "status": "posted",
                         "currency": "USD",
                     }
-                ]
+                ],
+                "moneyIn": 1000.0,
+                "moneyOut": 500.0,
+                "netCashflow": 500.0,
+                "averageIn": 1000.0,
+                "averageOut": 500.0,
+                "startDate": "2026-01-01",
+                "endDate": "2026-01-31",
             }
         ),
     )
     client = _make_client()
-    txns = client.get_transactions(date(2026, 1, 1), date(2026, 1, 31))
+    result = client.get_transactions(date(2026, 1, 1), date(2026, 1, 31))
 
-    assert len(txns) == 1
-    assert isinstance(txns[0], Transaction)
-    assert txns[0].date == date(2026, 1, 15)
-    assert txns[0].amount == Decimal("42.5")
-    assert txns[0].merchant == "Java Joe"
+    assert isinstance(result, TransactionsResult)
+    assert len(result.transactions) == 1
+    assert isinstance(result.transactions[0], Transaction)
+    assert result.transactions[0].date == date(2026, 1, 15)
+    assert result.transactions[0].amount == Decimal("42.5")
+    assert result.transactions[0].merchant == "Java Joe"
+
+    assert len(result.categories) == 1
+    assert isinstance(result.categories[0], Category)
+    assert result.categories[0].name == "Food"
+
+    assert isinstance(result.summary, TransactionsSummary)
+    assert result.summary.money_in == Decimal("1000")
+    assert result.summary.net_cashflow == Decimal("500")
 
 
 @responses.activate
 def test_get_transactions_sends_date_params() -> None:
     responses.post(
         _api_url("/transaction/getUserTransactions"),
-        json=_success_response({"transactions": []}),
+        json=_success_response(
+            {
+                "transactions": [],
+                "moneyIn": 0,
+                "moneyOut": 0,
+                "netCashflow": 0,
+                "averageIn": 0,
+                "averageOut": 0,
+                "startDate": "2026-03-01",
+                "endDate": "2026-03-31",
+            }
+        ),
     )
     client = _make_client()
     client.get_transactions(date(2026, 3, 1), date(2026, 3, 31))
@@ -160,52 +219,23 @@ def test_get_transactions_sends_date_params() -> None:
 def test_get_transactions_empty() -> None:
     responses.post(
         _api_url("/transaction/getUserTransactions"),
-        json=_success_response({"transactions": []}),
-    )
-    client = _make_client()
-    assert client.get_transactions(date(2026, 1, 1), date(2026, 1, 31)) == []
-
-
-# --- get_categories ---
-
-
-@responses.activate
-def test_get_categories_happy_path() -> None:
-    responses.post(
-        _api_url("/transaction/getUserTransactions"),
         json=_success_response(
             {
-                "transactions": [
-                    {
-                        "userTransactionId": 1,
-                        "userAccountId": 1,
-                        "transactionDate": "2026-01-15",
-                        "amount": 10.0,
-                        "categoryId": 7,
-                        "categoryName": "Groceries",
-                        "categoryType": "EXPENSE",
-                    },
-                    {
-                        "userTransactionId": 2,
-                        "userAccountId": 1,
-                        "transactionDate": "2026-01-16",
-                        "amount": 20.0,
-                        "categoryId": 7,
-                        "categoryName": "Groceries",
-                        "categoryType": "EXPENSE",
-                    },
-                ]
+                "transactions": [],
+                "moneyIn": 0,
+                "moneyOut": 0,
+                "netCashflow": 0,
+                "averageIn": 0,
+                "averageOut": 0,
+                "startDate": "2026-01-01",
+                "endDate": "2026-01-31",
             }
         ),
     )
     client = _make_client()
-    cats = client.get_categories(date(2026, 1, 1), date(2026, 1, 31))
-
-    assert len(cats) == 1
-    assert isinstance(cats[0], Category)
-    assert cats[0].category_id == 7
-    assert cats[0].name == "Groceries"
-    assert cats[0].type == "EXPENSE"
+    result = client.get_transactions(date(2026, 1, 1), date(2026, 1, 31))
+    assert result.transactions == ()
+    assert result.categories == ()
 
 
 # --- get_holdings ---
@@ -231,28 +261,33 @@ def test_get_holdings_happy_path() -> None:
                         "holdingPercentage": 0.75,
                         "source": "broker",
                     }
-                ]
+                ],
+                "holdingsTotalValue": 12500.00,
             }
         ),
     )
     client = _make_client()
-    holdings = client.get_holdings()
+    result = client.get_holdings()
 
-    assert len(holdings) == 1
-    assert isinstance(holdings[0], Holding)
-    assert holdings[0].ticker == "VTI"
-    assert holdings[0].value == Decimal("12500")
-    assert isinstance(holdings[0].snapshot_date, date)
+    assert isinstance(result, HoldingsResult)
+    assert len(result.holdings) == 1
+    assert isinstance(result.holdings[0], Holding)
+    assert result.holdings[0].ticker == "VTI"
+    assert result.holdings[0].value == Decimal("12500")
+    assert isinstance(result.holdings[0].snapshot_date, date)
+    assert result.total_value == Decimal("12500")
 
 
 @responses.activate
 def test_get_holdings_empty() -> None:
     responses.post(
         _api_url("/invest/getHoldings"),
-        json=_success_response({"holdings": []}),
+        json=_success_response({"holdings": [], "holdingsTotalValue": 0}),
     )
     client = _make_client()
-    assert client.get_holdings() == []
+    result = client.get_holdings()
+    assert result.holdings == ()
+    assert result.total_value == Decimal("0")
 
 
 # --- get_net_worth ---
@@ -278,25 +313,46 @@ def test_get_net_worth_happy_path() -> None:
                         "totalOtherAssets": 0.0,
                         "totalOtherLiabilities": 0.0,
                     }
-                ]
+                ],
+                "networthSummary": {
+                    "dateRangeChange": 5000.0,
+                    "dateRangePercentageChange": 3.45,
+                    "dateRangeCashChange": 1000.0,
+                    "dateRangeCashPercentageChange": 2.0,
+                    "dateRangeInvestmentChange": 4000.0,
+                    "dateRangeInvestmentPercentageChange": 2.5,
+                    "dateRangeCreditChange": 0.0,
+                    "dateRangeCreditPercentageChange": 0.0,
+                    "dateRangeMortgageChange": 0.0,
+                    "dateRangeMortgagePercentageChange": 0.0,
+                    "dateRangeLoanChange": 0.0,
+                    "dateRangeLoanPercentageChange": 0.0,
+                    "dateRangeOtherAssetsChange": 0.0,
+                    "dateRangeOtherAssetsPercentageChange": 0.0,
+                    "dateRangeOtherLiabilitiesChange": 0.0,
+                    "dateRangeOtherLiabilitiesPercentageChange": 0.0,
+                },
             }
         ),
     )
     client = _make_client()
-    nw = client.get_net_worth(date(2026, 3, 1), date(2026, 3, 31))
+    result = client.get_net_worth(date(2026, 3, 1), date(2026, 3, 31))
 
-    assert len(nw) == 1
-    assert isinstance(nw[0], NetWorthEntry)
-    assert nw[0].date == date(2026, 3, 1)
-    assert nw[0].networth == Decimal("150000")
-    assert nw[0].total_assets == Decimal("200000")
+    assert isinstance(result, NetWorthResult)
+    assert len(result.entries) == 1
+    assert isinstance(result.entries[0], NetWorthEntry)
+    assert result.entries[0].date == date(2026, 3, 1)
+    assert result.entries[0].networth == Decimal("150000")
+
+    assert isinstance(result.summary, NetWorthSummary)
+    assert result.summary.date_range_change == Decimal("5000")
 
 
 @responses.activate
 def test_get_net_worth_sends_date_params() -> None:
     responses.post(
         _api_url("/account/getHistories"),
-        json=_success_response({"networthHistories": []}),
+        json=_success_response({"networthHistories": [], "networthSummary": {}}),
     )
     client = _make_client()
     client.get_net_worth(date(2026, 1, 1), date(2026, 12, 31))
@@ -344,11 +400,11 @@ def test_get_account_balances_empty() -> None:
     assert client.get_account_balances(date(2026, 1, 1), date(2026, 1, 31)) == []
 
 
-# --- get_investment_performance ---
+# --- get_performance ---
 
 
 @responses.activate
-def test_get_investment_performance_happy_path() -> None:
+def test_get_performance_happy_path() -> None:
     responses.post(
         _api_url("/account/getPerformanceHistories"),
         json=_success_response(
@@ -359,121 +415,104 @@ def test_get_investment_performance_happy_path() -> None:
                         "300": 0.0823,
                         "aggregatePerformance": 0.09,
                     }
-                ]
+                ],
+                "benchmarkPerformanceHistory": [
+                    {
+                        "date": "2026-03-15",
+                        "^INX": 0.1245,
+                    }
+                ],
+                "accountSummaries": [
+                    {
+                        "userAccountId": 300,
+                        "accountName": "IRA",
+                        "siteName": "Fidelity",
+                        "currentBalance": 50000.0,
+                        "percentOfTotal": 100.0,
+                        "income": 0.0,
+                        "expense": 0.0,
+                        "cashFlow": 0.0,
+                        "oneDayBalanceValueChange": 100.0,
+                        "oneDayBalancePercentageChange": 0.2,
+                        "dateRangeBalanceValueChange": 5000.0,
+                        "dateRangeBalancePercentageChange": 11.1,
+                        "dateRangePerformanceValueChange": 5500.0,
+                        "oneDayPerformanceValueChange": 100.0,
+                        "balanceAsOfEndDate": 50000.0,
+                        "closedDate": "",
+                    }
+                ],
             }
         ),
     )
     client = _make_client()
-    perfs = client.get_investment_performance(date(2026, 1, 1), date(2026, 3, 31), [300])
+    result = client.get_performance(date(2026, 1, 1), date(2026, 3, 31), [300])
 
-    assert len(perfs) == 1
-    assert isinstance(perfs[0], InvestmentPerformance)
-    assert perfs[0].date == date(2026, 3, 15)
-    assert perfs[0].user_account_id == 300
-    assert perfs[0].performance == Decimal("0.0823")
+    assert isinstance(result, PerformanceResult)
+
+    # Only one API call
+    assert len(responses.calls) == 1
+
+    assert len(result.investments) == 1
+    assert isinstance(result.investments[0], InvestmentPerformance)
+    assert result.investments[0].performance == Decimal("0.0823")
+
+    assert len(result.benchmarks) == 1
+    assert isinstance(result.benchmarks[0], BenchmarkPerformance)
+    assert result.benchmarks[0].benchmark == "^INX"
+    assert result.benchmarks[0].performance == Decimal("0.1245")
+
+    assert len(result.account_summaries) == 1
+    assert isinstance(result.account_summaries[0], AccountPerformanceSummary)
+    assert result.account_summaries[0].user_account_id == 300
+    assert result.account_summaries[0].current_balance == Decimal("50000")
 
 
 @responses.activate
-def test_get_investment_performance_sends_account_ids() -> None:
+def test_get_performance_sends_account_ids() -> None:
     responses.post(
         _api_url("/account/getPerformanceHistories"),
-        json=_success_response({"performanceHistory": []}),
+        json=_success_response(
+            {
+                "performanceHistory": [],
+                "benchmarkPerformanceHistory": [],
+                "accountSummaries": [],
+            }
+        ),
     )
     client = _make_client()
-    client.get_investment_performance(date(2026, 1, 1), date(2026, 3, 31), [100, 200])
+    client.get_performance(date(2026, 1, 1), date(2026, 3, 31), [100, 200])
 
     body = str(responses.calls[0].request.body)
-    # URL-encoded JSON array
     assert "userAccountIds" in body
     assert "100" in body
     assert "200" in body
 
 
-# --- get_benchmark_performance ---
-
-
 @responses.activate
-def test_get_benchmark_performance_happy_path() -> None:
+def test_get_performance_empty() -> None:
     responses.post(
         _api_url("/account/getPerformanceHistories"),
         json=_success_response(
             {
-                "benchmarkPerformanceHistory": [
-                    {
-                        "date": "2026-03-15",
-                        "^INX": 0.1245,
-                    }
-                ]
+                "performanceHistory": [],
+                "benchmarkPerformanceHistory": [],
+                "accountSummaries": [],
             }
         ),
     )
     client = _make_client()
-    benchmarks = client.get_benchmark_performance(date(2026, 1, 1), date(2026, 3, 31), [300])
-
-    assert len(benchmarks) == 1
-    assert isinstance(benchmarks[0], BenchmarkPerformance)
-    assert benchmarks[0].date == date(2026, 3, 15)
-    assert benchmarks[0].benchmark == "^INX"
-    assert benchmarks[0].performance == Decimal("0.1245")
+    result = client.get_performance(date(2026, 1, 1), date(2026, 3, 31), [300])
+    assert result.investments == ()
+    assert result.benchmarks == ()
+    assert result.account_summaries == ()
 
 
-@responses.activate
-def test_get_benchmark_performance_empty() -> None:
-    responses.post(
-        _api_url("/account/getPerformanceHistories"),
-        json=_success_response({"benchmarkPerformanceHistory": []}),
-    )
-    client = _make_client()
-    assert client.get_benchmark_performance(date(2026, 1, 1), date(2026, 3, 31), [300]) == []
-
-
-# --- get_performance_and_benchmarks (combined) ---
+# --- get_quotes ---
 
 
 @responses.activate
-def test_get_performance_and_benchmarks_single_call() -> None:
-    """Combined method should fetch both from a single API call."""
-    responses.post(
-        _api_url("/account/getPerformanceHistories"),
-        json=_success_response(
-            {
-                "performanceHistory": [
-                    {
-                        "date": "2026-03-15",
-                        "300": 0.0823,
-                        "aggregatePerformance": 0.09,
-                    }
-                ],
-                "benchmarkPerformanceHistory": [
-                    {
-                        "date": "2026-03-15",
-                        "^INX": 0.1245,
-                    }
-                ],
-            }
-        ),
-    )
-    client = _make_client()
-    perfs, benchmarks = client.get_performance_and_benchmarks(
-        date(2026, 1, 1), date(2026, 3, 31), [300]
-    )
-
-    # Only one API call should have been made
-    assert len(responses.calls) == 1
-
-    assert len(perfs) == 1
-    assert perfs[0].performance == Decimal("0.0823")
-
-    assert len(benchmarks) == 1
-    assert benchmarks[0].benchmark == "^INX"
-    assert benchmarks[0].performance == Decimal("0.1245")
-
-
-# --- get_portfolio_vs_benchmark ---
-
-
-@responses.activate
-def test_get_portfolio_vs_benchmark_happy_path() -> None:
+def test_get_quotes_happy_path() -> None:
     responses.post(
         _api_url("/invest/getQuotes"),
         json=_success_response(
@@ -484,28 +523,59 @@ def test_get_portfolio_vs_benchmark_happy_path() -> None:
                         "YOU": 105.5,
                         "^INX": 103.2,
                     }
-                ]
+                ],
+                "latestPortfolio": {
+                    "last": 780000.0,
+                    "change": -4500.0,
+                    "percentChange": -0.58,
+                },
+                "latestQuotes": [
+                    {
+                        "ticker": "^INX",
+                        "last": 6624.7,
+                        "change": -91.39,
+                        "percentChange": -1.36,
+                        "longName": "S&P 500",
+                        "date": "2026-03-15",
+                    }
+                ],
             }
         ),
     )
     client = _make_client()
-    pvb = client.get_portfolio_vs_benchmark(date(2026, 1, 1), date(2026, 3, 31))
+    result = client.get_quotes(date(2026, 1, 1), date(2026, 3, 31))
 
-    assert len(pvb) == 1
-    assert isinstance(pvb[0], PortfolioVsBenchmark)
-    assert pvb[0].date == date(2026, 3, 15)
-    assert pvb[0].portfolio_value == Decimal("105.5")
-    assert pvb[0].sp500_value == Decimal("103.2")
+    assert isinstance(result, QuotesResult)
+
+    assert len(result.portfolio_vs_benchmark) == 1
+    assert isinstance(result.portfolio_vs_benchmark[0], PortfolioVsBenchmark)
+    assert result.portfolio_vs_benchmark[0].date == date(2026, 3, 15)
+    assert result.portfolio_vs_benchmark[0].portfolio_value == Decimal("105.5")
+
+    assert isinstance(result.snapshot, PortfolioSnapshot)
+    assert result.snapshot.last == Decimal("780000")
+    assert result.snapshot.change == Decimal("-4500")
+
+    assert len(result.market_quotes) == 1
+    assert isinstance(result.market_quotes[0], MarketQuote)
+    assert result.market_quotes[0].ticker == "^INX"
+    assert result.market_quotes[0].last == Decimal("6624.7")
 
 
 @responses.activate
-def test_get_portfolio_vs_benchmark_sends_date_params() -> None:
+def test_get_quotes_sends_date_params() -> None:
     responses.post(
         _api_url("/invest/getQuotes"),
-        json=_success_response({"histories": []}),
+        json=_success_response(
+            {
+                "histories": [],
+                "latestPortfolio": {"last": 0, "change": 0, "percentChange": 0},
+                "latestQuotes": [],
+            }
+        ),
     )
     client = _make_client()
-    client.get_portfolio_vs_benchmark(date(2026, 1, 1), date(2026, 6, 30))
+    client.get_quotes(date(2026, 1, 1), date(2026, 6, 30))
 
     body = str(responses.calls[0].request.body)
     assert "startDate=2026-01-01" in body
@@ -513,11 +583,11 @@ def test_get_portfolio_vs_benchmark_sends_date_params() -> None:
 
 
 @responses.activate
-def test_get_portfolio_vs_benchmark_api_error() -> None:
+def test_get_quotes_api_error() -> None:
     responses.post(
         _api_url("/invest/getQuotes"),
         json=_error_response("Invalid request"),
     )
     client = _make_client()
     with pytest.raises(EmpowerAPIError, match="Invalid request"):
-        client.get_portfolio_vs_benchmark(date(2026, 1, 1), date(2026, 3, 31))
+        client.get_quotes(date(2026, 1, 1), date(2026, 3, 31))
