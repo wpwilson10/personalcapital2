@@ -583,6 +583,26 @@ def test_get_quotes_sends_date_params() -> None:
 
 
 @responses.activate
+def test_get_quotes_missing_snapshot() -> None:
+    """get_quotes should not crash when latestPortfolio is missing."""
+    responses.post(
+        _api_url("/invest/getQuotes"),
+        json=_success_response(
+            {
+                "histories": [],
+                "latestQuotes": [],
+            }
+        ),
+    )
+    client = _make_client()
+    result = client.get_quotes(date(2026, 1, 1), date(2026, 3, 31))
+
+    assert result.snapshot.last == Decimal("0")
+    assert result.snapshot.change == Decimal("0")
+    assert result.snapshot.percent_change == Decimal("0")
+
+
+@responses.activate
 def test_get_quotes_api_error() -> None:
     responses.post(
         _api_url("/invest/getQuotes"),

@@ -19,6 +19,7 @@ import json
 import logging
 import re
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from personalcapital2.models import (
     HoldingsResult,
     NetWorthResult,
     PerformanceResult,
+    PortfolioSnapshot,
     QuotesResult,
     SpendingSummary,
     TransactionsResult,
@@ -315,9 +317,14 @@ class EmpowerClient:
         pvb_rows = parse_portfolio_vs_benchmark(response)
         snapshot_dict = parse_portfolio_snapshot(response)
         quote_rows = parse_market_quotes(response)
+        snapshot = (
+            portfolio_snapshot_from_dict(snapshot_dict)
+            if snapshot_dict
+            else PortfolioSnapshot(last=Decimal(0), change=Decimal(0), percent_change=Decimal(0))
+        )
         return QuotesResult(
             portfolio_vs_benchmark=tuple(portfolio_vs_benchmark_from_dict(r) for r in pvb_rows),
-            snapshot=portfolio_snapshot_from_dict(snapshot_dict),
+            snapshot=snapshot,
             market_quotes=tuple(market_quote_from_dict(r) for r in quote_rows),
         )
 
