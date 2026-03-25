@@ -17,6 +17,7 @@ from personalcapital2.parsers.quotes import (
     parse_portfolio_snapshot,
     parse_portfolio_vs_benchmark,
 )
+from personalcapital2.parsers.spending import parse_spending
 from personalcapital2.parsers.transactions import (
     extract_categories,
     parse_transactions,
@@ -38,6 +39,7 @@ __all__ = [
     "parse_net_worth_summary",
     "parse_portfolio_snapshot",
     "parse_portfolio_vs_benchmark",
+    "parse_spending",
     "parse_transactions",
     "parse_transactions_summary",
 ]

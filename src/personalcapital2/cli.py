@@ -268,6 +268,18 @@ def cmd_balances(args: argparse.Namespace) -> None:
     _output(balances, fmt)
 
 
+def cmd_spending(args: argparse.Namespace) -> None:
+    """Fetch spending summary."""
+    session_path = Path(args.session)
+    fmt: str = args.format
+    start: date = args.start
+    end: date = args.end
+    interval: str = args.interval
+    client = _make_client(session_path)
+    summaries = client.get_spending(start, end, interval)
+    _output(summaries, fmt)
+
+
 def cmd_performance(args: argparse.Namespace) -> None:
     """Fetch daily investment performance."""
     session_path = Path(args.session)
@@ -430,6 +442,16 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_p = sub.add_parser("snapshot", help="portfolio snapshot + market quotes (JSON)")
     _add_date_args(snapshot_p)
     snapshot_p.set_defaults(func=cmd_snapshot)
+
+    spending_p = sub.add_parser("spending", help="spending summary")
+    _add_date_args(spending_p)
+    spending_p.add_argument(
+        "--interval",
+        choices=["MONTH", "WEEK", "YEAR"],
+        default="MONTH",
+        help="interval type (default: MONTH)",
+    )
+    spending_p.set_defaults(func=cmd_spending)
 
     # Data commands (with date args + account IDs)
     performance_p = sub.add_parser("performance", help="daily investment performance")

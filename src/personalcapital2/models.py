@@ -533,6 +533,43 @@ def market_quote_from_dict(d: dict[str, Any]) -> MarketQuote:
     )
 
 
+@dataclass(frozen=True)
+class SpendingDetail:
+    """A single date/amount pair within a spending interval."""
+
+    date: date
+    amount: Decimal
+
+
+@dataclass(frozen=True)
+class SpendingSummary:
+    """Spending summary for a time interval (MONTH, WEEK, or YEAR)."""
+
+    type: str
+    average: Decimal | None
+    current: Decimal
+    target: Decimal
+    details: tuple[SpendingDetail, ...]
+
+
+def spending_detail_from_dict(d: dict[str, Any]) -> SpendingDetail:
+    return SpendingDetail(
+        date=_parse_date(d["date"]),
+        amount=safe_decimal(d["amount"], "spending_detail.amount"),
+    )
+
+
+def spending_summary_from_dict(d: dict[str, Any]) -> SpendingSummary:
+    raw_details: list[dict[str, Any]] = d.get("details", [])
+    return SpendingSummary(
+        type=d["type"],
+        average=safe_decimal_or_none(d.get("average"), "average"),
+        current=safe_decimal(d.get("current", 0), "current"),
+        target=safe_decimal(d.get("target", 0), "target"),
+        details=tuple(spending_detail_from_dict(det) for det in raw_details),
+    )
+
+
 # --- Response containers ---
 
 

@@ -47,6 +47,7 @@ pc2 balances --start 90d --end today
 pc2 categories --start mb --end today
 pc2 portfolio --start 365d --end today
 pc2 snapshot --start 365d --end today
+pc2 spending --start 90d --end today --interval MONTH
 pc2 performance --start 365d --end today --account-ids 100,200
 pc2 benchmarks --start 365d --end today --account-ids 100,200
 
@@ -76,6 +77,7 @@ Each method makes a single HTTP request and returns a response container with ty
 | `get_account_balances(start, end)` | `list[AccountBalance]` | Daily account balances |
 | `get_performance(start, end, account_ids)` | `PerformanceResult` | Investment + benchmark performance + per-account summaries |
 | `get_quotes(start, end)` | `QuotesResult` | Portfolio vs benchmark + snapshot + market quotes |
+| `get_spending(start, end, interval)` | `list[SpendingSummary]` | Spending by interval (MONTH/WEEK/YEAR) |
 
 Date parameters are `datetime.date`. Financial values are `decimal.Decimal`. All models are frozen dataclasses — see [Model Reference](docs/models.md) for every field and type.
 

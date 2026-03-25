@@ -283,3 +283,22 @@ Returned directly by `client.get_account_balances(start, end)` (not wrapped in a
 | `percent_change` | `Decimal` |
 | `long_name` | `str` |
 | `date` | `date` |
+
+### SpendingDetail
+
+| Field | Type |
+|---|---|
+| `date` | `date` |
+| `amount` | `Decimal` |
+
+### SpendingSummary
+
+Returned by `client.get_spending(start, end, interval)`.
+
+| Field | Type |
+|---|---|
+| `type` | `str` |
+| `average` | `Decimal \| None` |
+| `current` | `Decimal` |
+| `target` | `Decimal` |
+| `details` | `tuple[SpendingDetail, ...]` |

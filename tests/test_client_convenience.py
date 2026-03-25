@@ -591,3 +591,63 @@ def test_get_quotes_api_error() -> None:
     client = _make_client()
     with pytest.raises(EmpowerAPIError, match="Invalid request"):
         client.get_quotes(date(2026, 1, 1), date(2026, 3, 31))
+
+
+# --- get_spending ---
+
+
+@responses.activate
+def test_get_spending_happy_path() -> None:
+    responses.post(
+        _api_url("/account/getUserSpending"),
+        json=_success_response(
+            {
+                "intervals": [
+                    {
+                        "type": "MONTH",
+                        "average": 3683.74,
+                        "current": 3673.54,
+                        "target": 2836.88,
+                        "details": [
+                            {"date": "2026-03-01", "amount": 516.88},
+                        ],
+                    }
+                ]
+            }
+        ),
+    )
+    client = _make_client()
+    from personalcapital2.models import SpendingSummary
+
+    result = client.get_spending(date(2026, 1, 1), date(2026, 3, 31))
+
+    assert len(result) == 1
+    assert isinstance(result[0], SpendingSummary)
+    assert result[0].type == "MONTH"
+    assert result[0].average == Decimal("3683.74")
+    assert result[0].current == Decimal("3673.54")
+    assert len(result[0].details) == 1
+    assert result[0].details[0].amount == Decimal("516.88")
+
+
+@responses.activate
+def test_get_spending_empty() -> None:
+    responses.post(
+        _api_url("/account/getUserSpending"),
+        json=_success_response({"intervals": []}),
+    )
+    client = _make_client()
+    assert client.get_spending(date(2026, 1, 1), date(2026, 3, 31)) == []
+
+
+@responses.activate
+def test_get_spending_sends_interval_param() -> None:
+    responses.post(
+        _api_url("/account/getUserSpending"),
+        json=_success_response({"intervals": []}),
+    )
+    client = _make_client()
+    client.get_spending(date(2026, 1, 1), date(2026, 3, 31), "WEEK")
+
+    body = str(responses.calls[0].request.body)
+    assert "intervalType=WEEK" in body

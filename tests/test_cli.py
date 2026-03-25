@@ -43,6 +43,8 @@ from personalcapital2.models import (
     PortfolioSnapshot,
     PortfolioVsBenchmark,
     QuotesResult,
+    SpendingDetail,
+    SpendingSummary,
     Transaction,
     TransactionsResult,
     TransactionsSummary,
@@ -684,6 +686,41 @@ def test_cmd_snapshot_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     parsed = json.loads(captured.out)
     assert parsed["snapshot"]["last"] == 780000
     assert parsed["market_quotes"][0]["ticker"] == "^INX"
+
+
+def test_cmd_spending_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    summary = SpendingSummary(
+        type="MONTH",
+        average=Decimal("3683.74"),
+        current=Decimal("3673.54"),
+        target=Decimal("2836.88"),
+        details=(SpendingDetail(date=date(2026, 3, 1), amount=Decimal("516.88")),),
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_spending.return_value = [summary]
+        main(
+            [
+                "--session",
+                str(session),
+                "spending",
+                "--start",
+                "mb",
+                "--end",
+                "today",
+                "--interval",
+                "MONTH",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["type"] == "MONTH"
+    assert parsed[0]["current"] == 3673.54
 
 
 def test_cmd_raw_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

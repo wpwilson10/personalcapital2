@@ -34,6 +34,7 @@ from personalcapital2.models import (
     NetWorthResult,
     PerformanceResult,
     QuotesResult,
+    SpendingSummary,
     TransactionsResult,
     account_balance_from_dict,
     account_from_dict,
@@ -48,6 +49,7 @@ from personalcapital2.models import (
     net_worth_summary_from_dict,
     portfolio_snapshot_from_dict,
     portfolio_vs_benchmark_from_dict,
+    spending_summary_from_dict,
     transaction_from_dict,
     transactions_summary_from_dict,
 )
@@ -66,6 +68,7 @@ from personalcapital2.parsers import (
     parse_net_worth_summary,
     parse_portfolio_snapshot,
     parse_portfolio_vs_benchmark,
+    parse_spending,
     parse_transactions,
     parse_transactions_summary,
 )
@@ -317,6 +320,27 @@ class EmpowerClient:
             snapshot=portfolio_snapshot_from_dict(snapshot_dict),
             market_quotes=tuple(market_quote_from_dict(r) for r in quote_rows),
         )
+
+    def get_spending(
+        self, start: date, end: date, interval: str = "MONTH"
+    ) -> list[SpendingSummary]:
+        """Fetch spending summary for a date range.
+
+        Args:
+            start: Start date.
+            end: End date.
+            interval: Interval type — MONTH, WEEK, or YEAR.
+        """
+        response = self.fetch(
+            "/account/getUserSpending",
+            {
+                "startDate": start.isoformat(),
+                "endDate": end.isoformat(),
+                "intervalType": interval,
+            },
+        )
+        rows = parse_spending(response)
+        return [spending_summary_from_dict(r) for r in rows]
 
     # --- Data Fetching ---
 

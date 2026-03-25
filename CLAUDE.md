@@ -29,5 +29,5 @@ uv run ruff check .
 
 Cached raw API responses in `data/raw_responses/` (gitignored). Refresh with:
 ```bash
-cd ~/Documents/Claude/financial_tracker && op run --env-file .env -- uv run python ~/Documents/Claude/personalcapital2/scripts/dump_raw_responses.py
+op run --env-file .env -- uv run python scripts/dump_raw_responses.py
 ```

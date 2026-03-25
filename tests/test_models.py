@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -23,6 +24,8 @@ from personalcapital2.models import (
     net_worth_summary_from_dict,
     portfolio_snapshot_from_dict,
     portfolio_vs_benchmark_from_dict,
+    spending_detail_from_dict,
+    spending_summary_from_dict,
     transaction_from_dict,
     transactions_summary_from_dict,
 )
@@ -547,3 +550,46 @@ def test_market_quote_from_dict() -> None:
     assert q.percent_change == Decimal("-0.77")
     assert q.long_name == "S&P 500"
     assert q.date == date(2026, 3, 14)
+
+
+# --- Spending converters ---
+
+
+def test_spending_detail_from_dict() -> None:
+    d = {"date": "2026-03-01", "amount": 516.88}
+    det = spending_detail_from_dict(d)
+    assert det.date == date(2026, 3, 1)
+    assert det.amount == Decimal("516.88")
+
+
+def test_spending_summary_from_dict() -> None:
+    d = {
+        "type": "MONTH",
+        "average": 3683.74,
+        "current": 3673.54,
+        "target": 2836.88,
+        "details": [
+            {"date": "2026-03-01", "amount": 516.88},
+            {"date": "2026-03-02", "amount": 0},
+        ],
+    }
+    s = spending_summary_from_dict(d)
+    assert s.type == "MONTH"
+    assert s.average == Decimal("3683.74")
+    assert s.current == Decimal("3673.54")
+    assert s.target == Decimal("2836.88")
+    assert len(s.details) == 2
+    assert s.details[0].date == date(2026, 3, 1)
+    assert s.details[0].amount == Decimal("516.88")
+
+
+def test_spending_summary_from_dict_no_average() -> None:
+    d: dict[str, Any] = {
+        "type": "YEAR",
+        "current": 10000.0,
+        "target": 30000.0,
+        "details": [],
+    }
+    s = spending_summary_from_dict(d)
+    assert s.average is None
+    assert s.details == ()
