@@ -20,6 +20,7 @@ import re
 import sys
 from datetime import date, timedelta
 from decimal import Decimal
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
@@ -30,6 +31,8 @@ from personalcapital2.auth import authenticate
 from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
 from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
 
+_VERSION = _pkg_version("personalcapital2")
+
 # Exit codes
 EXIT_OK = 0
 EXIT_AUTH = 1
@@ -37,10 +40,34 @@ EXIT_USAGE = 2  # argparse default
 EXIT_API = 3
 EXIT_UNEXPECTED = 4
 
-# Pattern for relative date shortcuts: "30d", "mb", "mb-3", "me", "me-1"
+
+class AgentArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser that writes structured JSON errors to stderr.
+
+    Default argparse writes human-readable messages to stderr and calls sys.exit(2).
+    This override preserves the exit code but emits JSON so agents can parse errors.
+    Defaults to RawDescriptionHelpFormatter to preserve epilog formatting.
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        if "formatter_class" not in kwargs:
+            kwargs["formatter_class"] = argparse.RawDescriptionHelpFormatter
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType] — kwargs forwarded to ArgumentParser
+
+    def error(self, message: str) -> NoReturn:
+        err: dict[str, str] = {"error": message, "type": "UsageError"}
+        if "account-ids" in message:
+            err["suggestion"] = "List account IDs with: pc2 accounts"
+        sys.stderr.write(json.dumps(err) + "\n")
+        sys.exit(EXIT_USAGE)
+
+
+# Pattern for relative date shortcuts: "30d", "mb", "mb-3", "me", "me-1", "yb", "yb-2", "ye", "ye-1"
 _DAYS_AGO_RE = re.compile(r"^(\d+)d$")
 _MONTH_BEGIN_RE = re.compile(r"^mb(?:-(\d+))?$")
 _MONTH_END_RE = re.compile(r"^me(?:-(\d+))?$")
+_YEAR_BEGIN_RE = re.compile(r"^yb(?:-(\d+))?$")
+_YEAR_END_RE = re.compile(r"^ye(?:-(\d+))?$")
 
 
 def _month_offset(months_back: int) -> tuple[int, int]:
@@ -73,11 +100,21 @@ def _parse_date(s: str) -> date:
         last_day = calendar.monthrange(year, month)[1]
         return date(year, month, last_day)
 
+    m = _YEAR_BEGIN_RE.match(s)
+    if m:
+        years_back = int(m.group(1)) if m.group(1) else 0
+        return date(date.today().year - years_back, 1, 1)
+
+    m = _YEAR_END_RE.match(s)
+    if m:
+        years_back = int(m.group(1)) if m.group(1) else 0
+        return date(date.today().year - years_back, 12, 31)
+
     try:
         return date.fromisoformat(s)
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"invalid date '{s}': use YYYY-MM-DD, 'today', Nd, mb[-N], or me[-N]"
+            f"invalid date '{s}': use YYYY-MM-DD, 'today', Nd, mb[-N], me[-N], yb[-N], or ye[-N]"
         ) from None
 
 
@@ -101,12 +138,18 @@ def _json_default(obj: object) -> int | float | str:
     All other Decimals serialize as float, which is lossless for values within
     float64 range - sufficient for financial data (IEEE 754 has 15-17 significant
     digits, far exceeding any dollar amount or percentage the API returns).
+
+    Dates serialize as ISO-8601 strings.
+
+    Raises TypeError for any other type to avoid silently masking bugs.
     """
     if isinstance(obj, Decimal):
         if obj == obj.to_integral_value():
             return int(obj)
         return float(obj)
-    return str(obj)
+    if isinstance(obj, date):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def _serialize_json(items: Sequence[object]) -> str:
@@ -138,9 +181,17 @@ def _output(items: Sequence[object], fmt: str) -> None:
             sys.stdout.write("\n")
 
 
-def _error(message: str, error_type: str, exit_code: int) -> NoReturn:
+def _error(
+    message: str,
+    error_type: str,
+    exit_code: int,
+    *,
+    suggestion: str | None = None,
+) -> NoReturn:
     """Write a structured JSON error to stderr and exit."""
-    err = {"error": message, "type": error_type}
+    err: dict[str, str] = {"error": message, "type": error_type}
+    if suggestion is not None:
+        err["suggestion"] = suggestion
     sys.stderr.write(json.dumps(err) + "\n")
     sys.exit(exit_code)
 
@@ -157,6 +208,7 @@ def _make_client(session_path: Path) -> EmpowerClient:
             "No session found. Run: pc2 login",
             "EmpowerAuthError",
             EXIT_AUTH,
+            suggestion="pc2 login",
         )
     # Constructor auto-loads session when session_path is provided
     return EmpowerClient(session_path=session_path)
@@ -168,39 +220,51 @@ def _make_client(session_path: Path) -> EmpowerClient:
 def cmd_login(args: argparse.Namespace) -> None:
     """Authenticate interactively (2FA supported)."""
     session_path = Path(args.session)
+    if not sys.stdin.isatty():
+        _error(
+            "Login requires interactive terminal for 2FA. Run from a shell.",
+            "EmpowerAuthError",
+            EXIT_AUTH,
+            suggestion="Run 'pc2 login' from an interactive terminal",
+        )
     client = authenticate(session_path=session_path)
     client.save_session(session_path)
-    print(f"Logged in. Session saved to {session_path}")
+    result = {"session_path": str(session_path), "authenticated": True}
+    sys.stdout.write(json.dumps(result) + "\n")
 
 
 def cmd_logout(args: argparse.Namespace) -> None:
     """Delete the session file."""
     session_path = Path(args.session)
+    deleted = False
     if session_path.exists():
         session_path.unlink()
-        print(f"Session deleted: {session_path}")
-    else:
-        print(f"No session file found at {session_path}")
+        deleted = True
+    result = {"session_path": str(session_path), "deleted": deleted}
+    sys.stdout.write(json.dumps(result) + "\n")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
     """Report session status."""
-    session_path = Path(args.session)
-    if session_path.exists():
-        import time
+    import time
 
+    session_path = Path(args.session)
+    result: dict[str, str | bool | int] = {
+        "session_path": str(session_path),
+        "exists": session_path.exists(),
+    }
+    if session_path.exists():
         stat = session_path.stat()
-        age_seconds = time.time() - stat.st_mtime
+        age_seconds = int(time.time() - stat.st_mtime)
         if age_seconds < 3600:
-            age_str = f"{int(age_seconds / 60)}m ago"
+            age_human = f"{age_seconds // 60}m"
         elif age_seconds < 86400:
-            age_str = f"{int(age_seconds / 3600)}h ago"
+            age_human = f"{age_seconds // 3600}h"
         else:
-            age_str = f"{int(age_seconds / 86400)}d ago"
-        print(f"Session: {session_path}")
-        print(f"Last modified: {age_str}")
-    else:
-        print(f"No session found at {session_path}")
+            age_human = f"{age_seconds // 86400}d"
+        result["age_seconds"] = age_seconds
+        result["age_human"] = age_human
+    sys.stdout.write(json.dumps(result) + "\n")
 
 
 # --- Data commands ---
@@ -276,8 +340,8 @@ def cmd_spending(args: argparse.Namespace) -> None:
     end: date = args.end
     interval: str = args.interval
     client = _make_client(session_path)
-    summaries = client.get_spending(start, end, interval)
-    _output(summaries, fmt)
+    result = client.get_spending(start, end, interval)
+    _output(result.intervals, fmt)
 
 
 def cmd_performance(args: argparse.Namespace) -> None:
@@ -316,17 +380,23 @@ def cmd_portfolio(args: argparse.Namespace) -> None:
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
-    """Output portfolio snapshot and market quotes as JSON."""
+    """Output portfolio snapshot and market quotes."""
     session_path = Path(args.session)
+    fmt: str = args.format
     start: date = args.start
     end: date = args.end
     client = _make_client(session_path)
     result = client.get_quotes(start, end)
-    output = {
-        "snapshot": dataclasses.asdict(result.snapshot),
-        "market_quotes": [dataclasses.asdict(q) for q in result.market_quotes],
-    }
-    sys.stdout.write(json.dumps(output, default=_json_default, indent=2) + "\n")
+    if fmt == "csv":
+        # CSV outputs the market quotes table (snapshot is a single summary row,
+        # not useful as a standalone CSV — use JSON for the combined view)
+        _output(result.market_quotes, fmt)
+    else:
+        output = {
+            "snapshot": dataclasses.asdict(result.snapshot),
+            "market_quotes": [dataclasses.asdict(q) for q in result.market_quotes],
+        }
+        sys.stdout.write(json.dumps(output, default=_json_default, indent=2) + "\n")
 
 
 def cmd_raw(args: argparse.Namespace) -> None:
@@ -355,18 +425,18 @@ def cmd_raw(args: argparse.Namespace) -> None:
 
 
 def _add_date_args(parser: argparse.ArgumentParser) -> None:
-    """Add required --start and --end date arguments."""
+    """Add --start and --end date arguments with sensible defaults."""
     parser.add_argument(
         "--start",
         type=_parse_date,
-        required=True,
-        help="start date: YYYY-MM-DD, today, Nd, mb[-N], me[-N]",
+        default=_parse_date("30d"),
+        help="start date (default: 30d). YYYY-MM-DD, today, Nd, mb[-N], me[-N], yb[-N], ye[-N]",
     )
     parser.add_argument(
         "--end",
         type=_parse_date,
-        required=True,
-        help="end date: YYYY-MM-DD, today, Nd, mb[-N], me[-N]",
+        default=_parse_date("today"),
+        help="end date (default: today). YYYY-MM-DD, today, Nd, mb[-N], me[-N], yb[-N], ye[-N]",
     )
 
 
@@ -380,11 +450,47 @@ def _add_account_ids_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser() -> AgentArgumentParser:
     """Build the CLI argument parser."""
-    parser = argparse.ArgumentParser(
+    # Shared parent parser so --format and --session work after the subcommand too.
+    # Uses SUPPRESS so subparser defaults don't overwrite main parser values.
+    _common = AgentArgumentParser(add_help=False)
+    _common.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default=argparse.SUPPRESS,
+        help="output format (default: json)",
+    )
+    _common.add_argument(
+        "--session",
+        type=Path,
+        default=argparse.SUPPRESS,
+        help=f"session file path (default: {DEFAULT_SESSION_PATH})",
+    )
+
+    parser = AgentArgumentParser(
         prog="pc2",
         description="CLI for the Empower (Personal Capital) API",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+exit codes:
+  0  success
+  1  authentication error (no session, expired, 2FA required)
+  2  usage error (bad arguments, unknown command)
+  3  API error (request failed, rate limited)
+  4  unexpected error
+
+examples:
+  pc2 accounts                              list all linked accounts
+  pc2 transactions --start 90d              last 90 days of transactions
+  pc2 net-worth --start yb --format csv     YTD net worth as CSV
+  pc2 performance --start mb-6 --account-ids 123,456
+  pc2 raw /newaccount/getAccounts2          raw API call""",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"pc2 {_VERSION}",
     )
     parser.add_argument(
         "--format",
@@ -402,48 +508,158 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     # Auth commands
-    login_p = sub.add_parser("login", help="authenticate (interactive 2FA)")
+    login_p = sub.add_parser(
+        "login",
+        parents=[_common],
+        help="authenticate (interactive 2FA)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 login                        start interactive 2FA login
+  pc2 login --session ./my.json    save session to custom path""",
+    )
     login_p.set_defaults(func=cmd_login)
 
-    logout_p = sub.add_parser("logout", help="delete session file")
+    logout_p = sub.add_parser(
+        "logout",
+        parents=[_common],
+        help="delete session file",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 logout                       delete default session file""",
+    )
     logout_p.set_defaults(func=cmd_logout)
 
-    status_p = sub.add_parser("status", help="show session status")
+    status_p = sub.add_parser(
+        "status",
+        parents=[_common],
+        help="show session status",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 status                       check if session exists and its age
+  pc2 status | jq .exists          machine-readable session check""",
+    )
     status_p.set_defaults(func=cmd_status)
 
     # Data commands (no date args)
-    accounts_p = sub.add_parser("accounts", help="list linked accounts")
+    accounts_p = sub.add_parser(
+        "accounts",
+        parents=[_common],
+        help="list linked accounts",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 accounts                     list all linked accounts as JSON
+  pc2 accounts --format csv        list accounts as CSV""",
+    )
     accounts_p.set_defaults(func=cmd_accounts)
 
-    holdings_p = sub.add_parser("holdings", help="current investment holdings")
+    holdings_p = sub.add_parser(
+        "holdings",
+        parents=[_common],
+        help="current investment holdings",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 holdings                     list current holdings
+  pc2 holdings --format csv        export holdings as CSV""",
+    )
     holdings_p.set_defaults(func=cmd_holdings)
 
     # Data commands (with date args)
-    transactions_p = sub.add_parser("transactions", help="fetch transactions")
+    transactions_p = sub.add_parser(
+        "transactions",
+        parents=[_common],
+        help="fetch transactions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 transactions                         last 30 days (default)
+  pc2 transactions --start 90d             last 90 days
+  pc2 transactions --start 2026-01-01 --end 2026-01-31""",
+    )
     _add_date_args(transactions_p)
     transactions_p.set_defaults(func=cmd_transactions)
 
-    categories_p = sub.add_parser("categories", help="fetch transaction categories")
+    categories_p = sub.add_parser(
+        "categories",
+        parents=[_common],
+        help="fetch transaction categories",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 categories --start mb --end today    categories from this month""",
+    )
     _add_date_args(categories_p)
     categories_p.set_defaults(func=cmd_categories)
 
-    net_worth_p = sub.add_parser("net-worth", help="daily net worth history")
+    net_worth_p = sub.add_parser(
+        "net-worth",
+        parents=[_common],
+        help="daily net worth history",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 net-worth --start yb                 YTD net worth
+  pc2 net-worth --start mb-12 --format csv year of net worth as CSV""",
+    )
     _add_date_args(net_worth_p)
     net_worth_p.set_defaults(func=cmd_net_worth)
 
-    balances_p = sub.add_parser("balances", help="daily account balance history")
+    balances_p = sub.add_parser(
+        "balances",
+        parents=[_common],
+        help="daily account balance history",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 balances --start mb --end today      this month's daily balances""",
+    )
     _add_date_args(balances_p)
     balances_p.set_defaults(func=cmd_balances)
 
-    portfolio_p = sub.add_parser("portfolio", help="portfolio vs S&P 500")
+    portfolio_p = sub.add_parser(
+        "portfolio",
+        parents=[_common],
+        help="portfolio vs S&P 500",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 portfolio --start mb-6               6-month portfolio vs S&P 500""",
+    )
     _add_date_args(portfolio_p)
     portfolio_p.set_defaults(func=cmd_portfolio)
 
-    snapshot_p = sub.add_parser("snapshot", help="portfolio snapshot + market quotes (JSON)")
+    snapshot_p = sub.add_parser(
+        "snapshot",
+        parents=[_common],
+        help="portfolio snapshot + market quotes",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+output varies by format:
+  --format json (default)  combined object with "snapshot" and "market_quotes" keys
+  --format csv             market quotes table only (snapshot is a single summary
+                           row, not useful as standalone CSV — use JSON for the
+                           combined view)
+
+examples:
+  pc2 snapshot --start mb --end today
+  pc2 snapshot --format csv                market quotes as CSV""",
+    )
     _add_date_args(snapshot_p)
     snapshot_p.set_defaults(func=cmd_snapshot)
 
-    spending_p = sub.add_parser("spending", help="spending summary")
+    spending_p = sub.add_parser(
+        "spending",
+        parents=[_common],
+        help="spending summary",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 spending --start mb-6 --end today --interval MONTH""",
+    )
     _add_date_args(spending_p)
     spending_p.add_argument(
         "--interval",
@@ -454,18 +670,43 @@ def build_parser() -> argparse.ArgumentParser:
     spending_p.set_defaults(func=cmd_spending)
 
     # Data commands (with date args + account IDs)
-    performance_p = sub.add_parser("performance", help="daily investment performance")
+    performance_p = sub.add_parser(
+        "performance",
+        parents=[_common],
+        help="daily investment performance",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 performance --start mb-6 --account-ids 123,456""",
+    )
     _add_date_args(performance_p)
     _add_account_ids_arg(performance_p)
     performance_p.set_defaults(func=cmd_performance)
 
-    benchmarks_p = sub.add_parser("benchmarks", help="daily benchmark performance")
+    benchmarks_p = sub.add_parser(
+        "benchmarks",
+        parents=[_common],
+        help="daily benchmark performance",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 benchmarks --start mb-6 --account-ids 123,456""",
+    )
     _add_date_args(benchmarks_p)
     _add_account_ids_arg(benchmarks_p)
     benchmarks_p.set_defaults(func=cmd_benchmarks)
 
     # Raw command
-    raw_p = sub.add_parser("raw", help="raw API call (always JSON output)")
+    raw_p = sub.add_parser(
+        "raw",
+        parents=[_common],
+        help="raw API call (always JSON output)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  pc2 raw /newaccount/getAccounts2
+  pc2 raw /transaction/getUserTransactions --data startDate=2026-01-01 --data endDate=2026-01-31""",
+    )
     raw_p.add_argument("endpoint", help="API endpoint (e.g. /newaccount/getAccounts2)")
     raw_p.add_argument(
         "--data",
@@ -491,7 +732,7 @@ def main(argv: list[str] | None = None) -> None:
         func = args.func
         func(args)
     except EmpowerAuthError as e:
-        _error(str(e), "EmpowerAuthError", EXIT_AUTH)
+        _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion="pc2 login")
     except EmpowerAPIError as e:
         _error(str(e), "EmpowerAPIError", EXIT_API)
     except KeyboardInterrupt:
@@ -499,4 +740,11 @@ def main(argv: list[str] | None = None) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        _error(str(e), type(e).__name__, EXIT_UNEXPECTED)
+        # Avoid leaking potentially sensitive details (e.g., request bodies in HTTP errors).
+        # Include exception type and a sanitized message.
+        msg = type(e).__name__
+        err_str = str(e)
+        # Only include the message if it doesn't look like it contains request/response data
+        if len(err_str) < 200 and "\n" not in err_str:
+            msg = err_str
+        _error(msg, type(e).__name__, EXIT_UNEXPECTED)

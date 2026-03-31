@@ -17,6 +17,7 @@ from personalcapital2.cli import (
     EXIT_API,
     EXIT_AUTH,
     EXIT_USAGE,
+    AgentArgumentParser,
     _parse_account_ids,
     _parse_date,
     _serialize_csv,
@@ -44,6 +45,7 @@ from personalcapital2.models import (
     PortfolioVsBenchmark,
     QuotesResult,
     SpendingDetail,
+    SpendingResult,
     SpendingSummary,
     Transaction,
     TransactionsResult,
@@ -121,6 +123,26 @@ def test_parse_date_month_begin_wraps_year() -> None:
         expected_month += 12
         expected_year -= 1
     assert result == date(expected_year, expected_month, 1)
+
+
+def test_parse_date_year_begin() -> None:
+    result = _parse_date("yb")
+    assert result == date(date.today().year, 1, 1)
+
+
+def test_parse_date_year_begin_back() -> None:
+    result = _parse_date("yb-2")
+    assert result == date(date.today().year - 2, 1, 1)
+
+
+def test_parse_date_year_end() -> None:
+    result = _parse_date("ye")
+    assert result == date(date.today().year, 12, 31)
+
+
+def test_parse_date_year_end_back() -> None:
+    result = _parse_date("ye-1")
+    assert result == date(date.today().year - 1, 12, 31)
 
 
 def test_parse_date_invalid() -> None:
@@ -230,6 +252,13 @@ def test_serialize_json_dates_become_strings() -> None:
     assert parsed[0]["created_at"] == "2024-01-01"
 
 
+def test_json_default_raises_on_unknown_type() -> None:
+    from personalcapital2.cli import _json_default
+
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        _json_default(object())
+
+
 def test_serialize_csv_models() -> None:
     items: list[object] = [_sample_account()]
     result = _serialize_csv(items)
@@ -283,10 +312,20 @@ def test_parser_has_subcommands() -> None:
     assert args.command == "accounts"
 
 
-def test_parser_transactions_requires_dates() -> None:
+def test_parser_transactions_defaults_dates() -> None:
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["transactions"])
+    args = parser.parse_args(["transactions"])
+    assert args.start == date.today() - timedelta(days=30)
+    assert args.end == date.today()
+
+
+def test_parser_version(capsys: pytest.CaptureFixture[str]) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["--version"])
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "pc2" in captured.out
 
 
 def test_parser_performance_requires_account_ids() -> None:
@@ -317,6 +356,128 @@ def test_parser_raw_data_pairs() -> None:
     parser = build_parser()
     args = parser.parse_args(["raw", "/endpoint", "--data", "key1=val1", "--data", "key2=val2"])
     assert args.data == ["key1=val1", "key2=val2"]
+
+
+def test_parser_is_agent_argument_parser() -> None:
+    """build_parser returns AgentArgumentParser for structured errors."""
+    parser = build_parser()
+    assert isinstance(parser, AgentArgumentParser)
+
+
+def test_parser_format_after_subcommand() -> None:
+    """--format works after the subcommand (not just before)."""
+    parser = build_parser()
+    args = parser.parse_args(["accounts", "--format", "csv"])
+    assert args.format == "csv"
+
+
+def test_parser_format_before_and_after_identical() -> None:
+    """Both positions produce the same result."""
+    parser = build_parser()
+    args_before = parser.parse_args(["--format", "csv", "accounts"])
+    args_after = parser.parse_args(["accounts", "--format", "csv"])
+    assert args_before.format == args_after.format == "csv"
+
+
+def test_parser_session_after_subcommand(tmp_path: Path) -> None:
+    """--session works after the subcommand."""
+    from pathlib import Path as _Path
+
+    parser = build_parser()
+    session_path = str(tmp_path / "test.json")
+    args = parser.parse_args(["accounts", "--session", session_path])
+    assert args.session == _Path(session_path)
+
+
+def test_parser_format_default_not_overridden_by_subparser() -> None:
+    """When --format is not passed, the main parser default (json) is used."""
+    parser = build_parser()
+    args = parser.parse_args(["accounts"])
+    assert args.format == "json"
+
+
+# --- Structured argparse error tests ---
+
+
+def test_argparse_error_is_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """Argparse errors produce JSON to stderr, not plain text."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(["transactions", "--start", "bad-date"])
+
+    assert exc_info.value.code == EXIT_USAGE
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "UsageError"
+    assert "error" in err
+    # Nothing to stdout
+    assert captured.out == ""
+
+
+def test_argparse_unknown_flag_is_json(capsys: pytest.CaptureFixture[str]) -> None:
+    """Unknown flags produce structured JSON errors."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(["accounts", "--bogus"])
+
+    assert exc_info.value.code == EXIT_USAGE
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "UsageError"
+
+
+def test_argparse_account_ids_error_has_suggestion(capsys: pytest.CaptureFixture[str]) -> None:
+    """Account-ids validation errors include a suggestion to list accounts."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(["performance", "--start", "today", "--end", "today", "--account-ids", "abc"])
+
+    assert exc_info.value.code == EXIT_USAGE
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "UsageError"
+    assert err["suggestion"] == "List account IDs with: pc2 accounts"
+
+
+# --- Help text tests ---
+
+
+def test_help_shows_exit_codes(capsys: pytest.CaptureFixture[str]) -> None:
+    """Top-level --help includes exit code documentation."""
+    with pytest.raises(SystemExit):
+        main(["--help"])
+
+    captured = capsys.readouterr()
+    assert "exit codes:" in captured.out
+    assert "authentication error" in captured.out
+    assert "usage error" in captured.out
+
+
+def test_help_shows_examples(capsys: pytest.CaptureFixture[str]) -> None:
+    """Top-level --help includes usage examples."""
+    with pytest.raises(SystemExit):
+        main(["--help"])
+
+    captured = capsys.readouterr()
+    assert "examples:" in captured.out
+    assert "pc2 accounts" in captured.out
+
+
+def test_transactions_help_shows_examples(capsys: pytest.CaptureFixture[str]) -> None:
+    """Subcommand --help includes examples."""
+    with pytest.raises(SystemExit):
+        main(["transactions", "--help"])
+
+    captured = capsys.readouterr()
+    assert "examples:" in captured.out
+    assert "pc2 transactions" in captured.out
+
+
+def test_snapshot_help_shows_format_behavior(capsys: pytest.CaptureFixture[str]) -> None:
+    """snapshot --help explains format-dependent output."""
+    with pytest.raises(SystemExit):
+        main(["snapshot", "--help"])
+
+    captured = capsys.readouterr()
+    assert "output varies by format:" in captured.out
+    assert "market quotes table only" in captured.out
 
 
 # --- Helper to create a fake session file ---
@@ -688,6 +849,50 @@ def test_cmd_snapshot_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     assert parsed["market_quotes"][0]["ticker"] == "^INX"
 
 
+def test_cmd_snapshot_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    session = _create_session(tmp_path)
+    snapshot = PortfolioSnapshot(
+        last=Decimal("780000"), change=Decimal("-4500"), percent_change=Decimal("-0.58")
+    )
+    quote = MarketQuote(
+        ticker="^INX",
+        last=Decimal("6624.7"),
+        change=Decimal("-91.39"),
+        percent_change=Decimal("-1.36"),
+        long_name="S&P 500",
+        date=date(2026, 3, 15),
+    )
+    result = QuotesResult(
+        portfolio_vs_benchmark=(),
+        snapshot=snapshot,
+        market_quotes=(quote,),
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance._load_session = MagicMock()
+        instance.get_quotes.return_value = result
+        main(
+            [
+                "--format",
+                "csv",
+                "--session",
+                str(session),
+                "snapshot",
+                "--start",
+                "mb",
+                "--end",
+                "today",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    lines = captured.out.strip().split("\n")
+    assert "ticker" in lines[0]
+    assert "^INX" in lines[1]
+
+
 def test_cmd_spending_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = _create_session(tmp_path)
     summary = SpendingSummary(
@@ -702,7 +907,7 @@ def test_cmd_spending_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_spending.return_value = [summary]
+        instance.get_spending.return_value = SpendingResult(intervals=(summary,))
         main(
             [
                 "--session",
@@ -775,6 +980,7 @@ def test_auth_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     err = json.loads(captured.err)
     assert err["type"] == "EmpowerAuthError"
     assert "Session expired" in err["error"]
+    assert err["suggestion"] == "pc2 login"
 
 
 def test_api_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -804,6 +1010,7 @@ def test_no_session_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     captured = capsys.readouterr()
     err = json.loads(captured.err)
     assert "No session found" in err["error"]
+    assert err["suggestion"] == "pc2 login"
 
 
 def test_no_command_shows_help(capsys: pytest.CaptureFixture[str]) -> None:
@@ -821,7 +1028,11 @@ def test_no_command_shows_help(capsys: pytest.CaptureFixture[str]) -> None:
 def test_cmd_login(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = tmp_path / "session.json"
 
-    with patch("personalcapital2.cli.authenticate") as mock_auth:
+    with (
+        patch("personalcapital2.cli.authenticate") as mock_auth,
+        patch("personalcapital2.cli.sys.stdin") as mock_stdin,
+    ):
+        mock_stdin.isatty.return_value = True
         mock_client = MagicMock()
         mock_auth.return_value = mock_client
         main(["--session", str(session), "login"])
@@ -829,7 +1040,28 @@ def test_cmd_login(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     mock_auth.assert_called_once_with(session_path=session)
     mock_client.save_session.assert_called_once_with(session)
     captured = capsys.readouterr()
-    assert "Logged in" in captured.out
+    parsed = json.loads(captured.out)
+    assert parsed["authenticated"] is True
+    assert parsed["session_path"] == str(session)
+
+
+def test_cmd_login_not_tty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Login fails immediately if stdin is not a TTY."""
+    session = tmp_path / "session.json"
+
+    with (
+        patch("personalcapital2.cli.sys.stdin") as mock_stdin,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        mock_stdin.isatty.return_value = False
+        main(["--session", str(session), "login"])
+
+    assert exc_info.value.code == EXIT_AUTH
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "EmpowerAuthError"
+    assert "interactive terminal" in err["error"]
+    assert "suggestion" in err
 
 
 def test_cmd_logout_deletes_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -840,7 +1072,9 @@ def test_cmd_logout_deletes_file(tmp_path: Path, capsys: pytest.CaptureFixture[s
 
     assert not session.exists()
     captured = capsys.readouterr()
-    assert "deleted" in captured.out
+    parsed = json.loads(captured.out)
+    assert parsed["deleted"] is True
+    assert parsed["session_path"] == str(session)
 
 
 def test_cmd_logout_no_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -849,7 +1083,9 @@ def test_cmd_logout_no_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     main(["--session", str(session), "logout"])
 
     captured = capsys.readouterr()
-    assert "No session file" in captured.out
+    parsed = json.loads(captured.out)
+    assert parsed["deleted"] is False
+    assert parsed["session_path"] == str(session)
 
 
 def test_cmd_status_exists(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -858,8 +1094,11 @@ def test_cmd_status_exists(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     main(["--session", str(session), "status"])
 
     captured = capsys.readouterr()
-    assert "Session:" in captured.out
-    assert "Last modified:" in captured.out
+    parsed = json.loads(captured.out)
+    assert parsed["exists"] is True
+    assert parsed["session_path"] == str(session)
+    assert "age_seconds" in parsed
+    assert "age_human" in parsed
 
 
 def test_cmd_status_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -868,4 +1107,7 @@ def test_cmd_status_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     main(["--session", str(session), "status"])
 
     captured = capsys.readouterr()
-    assert "No session found" in captured.out
+    parsed = json.loads(captured.out)
+    assert parsed["exists"] is False
+    assert parsed["session_path"] == str(session)
+    assert "age_seconds" not in parsed
