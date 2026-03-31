@@ -42,7 +42,7 @@ SAMPLE_TXN = {
 
 def test_parse_transaction() -> None:
     response = _make_response([SAMPLE_TXN])
-    rows = parse_transactions(response, "2026-03-14T10:00:00")
+    rows = parse_transactions(response)
     assert len(rows) == 1
     row = rows[0]
     assert row["user_transaction_id"] == 100001
@@ -104,7 +104,7 @@ def test_income_transaction() -> None:
         "categoryType": "INCOME",
     }
     response = _make_response([income_txn])
-    rows = parse_transactions(response, "2026-03-14T10:00:00")
+    rows = parse_transactions(response)
     assert rows[0]["is_cash_in"] is True
     assert rows[0]["is_income"] is True
 
@@ -124,7 +124,7 @@ def test_malformed_transaction_skipped_not_crash() -> None:
         "categoryType": "EXPENSE",
     }
     response = _make_response([SAMPLE_TXN, malformed])
-    rows = parse_transactions(response, "2026-03-14T10:00:00")
+    rows = parse_transactions(response)
     # The valid transaction should be parsed, the malformed one skipped
     assert len(rows) == 1
     assert rows[0]["user_transaction_id"] == 100001
@@ -132,7 +132,7 @@ def test_malformed_transaction_skipped_not_crash() -> None:
 
 def test_empty_transactions() -> None:
     response = _make_response([])
-    assert parse_transactions(response, "2026-03-14T10:00:00") == []
+    assert parse_transactions(response) == []
     assert extract_categories(response) == []
 
 

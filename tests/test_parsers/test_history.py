@@ -33,7 +33,7 @@ def test_parse_net_worth() -> None:
             ]
         }
     }
-    rows = parse_net_worth(response, "2026-03-14T10:00:00")
+    rows = parse_net_worth(response)
     assert len(rows) == 1
     row = rows[0]
     assert row["date"] == "2026-03-14"
@@ -61,7 +61,7 @@ def test_parse_account_balances_filters_annotations() -> None:
             ]
         }
     }
-    rows = parse_account_balances(response, "2026-03-14T10:00:00")
+    rows = parse_account_balances(response)
     assert len(rows) == 2
 
     ids = {r["user_account_id"] for r in rows}
@@ -92,7 +92,7 @@ def test_malformed_balance_entry_skipped_not_crash() -> None:
             ]
         }
     }
-    rows = parse_account_balances(response, "2026-03-14T10:00:00")
+    rows = parse_account_balances(response)
     # The entry with non-numeric balance should be skipped, the valid one kept
     assert len(rows) == 1
     assert rows[0]["user_account_id"] == 305886753
@@ -101,8 +101,8 @@ def test_malformed_balance_entry_skipped_not_crash() -> None:
 
 def test_empty_histories() -> None:
     response: dict[str, object] = {"spData": {"networthHistories": [], "histories": []}}
-    assert parse_net_worth(response, "2026-03-14T10:00:00") == []
-    assert parse_account_balances(response, "2026-03-14T10:00:00") == []
+    assert parse_net_worth(response) == []
+    assert parse_account_balances(response) == []
 
 
 # --- parse_net_worth_summary ---

@@ -61,12 +61,11 @@ def _epoch_ms_to_iso(epoch_ms: int | float) -> str:
     return datetime.fromtimestamp(epoch_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
 
 
-def parse_accounts(response: dict[str, Any], synced_at: str = "") -> list[dict[str, Any]]:
+def parse_accounts(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse getAccounts2 response into account row dicts.
 
     Args:
         response: Raw API response from getAccounts2.
-        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of account dicts with normalized keys.

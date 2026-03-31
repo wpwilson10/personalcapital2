@@ -622,3 +622,10 @@ class QuotesResult:
     portfolio_vs_benchmark: tuple[PortfolioVsBenchmark, ...]
     snapshot: PortfolioSnapshot
     market_quotes: tuple[MarketQuote, ...]
+
+
+@dataclass(frozen=True)
+class SpendingResult:
+    """Response container for get_spending()."""
+
+    intervals: tuple[SpendingSummary, ...]

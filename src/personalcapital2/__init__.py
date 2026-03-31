@@ -1,5 +1,9 @@
 """personalcapital2 — Python client for the Empower (Personal Capital) unofficial API."""
 
+from importlib.metadata import version as _version
+
+__version__: str = _version("personalcapital2")
+
 from personalcapital2.auth import authenticate
 from personalcapital2.client import EmpowerClient
 from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, TwoFactorRequiredError
@@ -23,6 +27,7 @@ from personalcapital2.models import (
     PortfolioVsBenchmark,
     QuotesResult,
     SpendingDetail,
+    SpendingResult,
     SpendingSummary,
     Transaction,
     TransactionsResult,
@@ -53,11 +58,13 @@ __all__ = [
     "PortfolioVsBenchmark",
     "QuotesResult",
     "SpendingDetail",
+    "SpendingResult",
     "SpendingSummary",
     "Transaction",
     "TransactionsResult",
     "TransactionsSummary",
     "TwoFactorMode",
     "TwoFactorRequiredError",
+    "__version__",
     "authenticate",
 ]

@@ -25,7 +25,7 @@ def test_parse_investment_performance() -> None:
             ]
         }
     }
-    rows = parse_investment_performance(response, "2026-03-14T10:00:00")
+    rows = parse_investment_performance(response)
     assert len(rows) == 2
 
     by_account = {r["user_account_id"]: r for r in rows}
@@ -50,7 +50,7 @@ def test_parse_benchmark_performance() -> None:
             ]
         }
     }
-    rows = parse_benchmark_performance(response, "2026-03-14T10:00:00")
+    rows = parse_benchmark_performance(response)
     assert len(rows) == 6
 
     by_bench = {r["benchmark"]: r for r in rows}
@@ -72,7 +72,7 @@ def test_skips_annotation_keys() -> None:
             ]
         }
     }
-    rows = parse_investment_performance(response, "2026-03-14T10:00:00")
+    rows = parse_investment_performance(response)
     assert len(rows) == 1
     assert rows[0]["user_account_id"] == 305886794
 
@@ -81,8 +81,8 @@ def test_empty_performance() -> None:
     response: dict[str, object] = {
         "spData": {"performanceHistory": [], "benchmarkPerformanceHistory": []}
     }
-    assert parse_investment_performance(response, "2026-03-14T10:00:00") == []
-    assert parse_benchmark_performance(response, "2026-03-14T10:00:00") == []
+    assert parse_investment_performance(response) == []
+    assert parse_benchmark_performance(response) == []
 
 
 # --- parse_account_summaries ---

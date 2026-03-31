@@ -45,7 +45,7 @@ _KNOWN_BAL_KEYS = frozenset(
 )
 
 
-def parse_net_worth(response: dict[str, Any], synced_at: str = "") -> list[dict[str, Any]]:
+def parse_net_worth(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse getHistories -> networthHistories into daily net worth dicts.
 
     Filters out zero-value rows where all financial fields are 0 — these are
@@ -53,7 +53,6 @@ def parse_net_worth(response: dict[str, Any], synced_at: str = "") -> list[dict[
 
     Args:
         response: Raw API response from getHistories.
-        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of net worth dicts with normalized keys.
@@ -118,7 +117,7 @@ def parse_net_worth(response: dict[str, Any], synced_at: str = "") -> list[dict[
     return rows
 
 
-def parse_account_balances(response: dict[str, Any], synced_at: str = "") -> list[dict[str, Any]]:
+def parse_account_balances(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse getHistories -> histories into daily account balance dicts.
 
     Filters out:
@@ -127,7 +126,6 @@ def parse_account_balances(response: dict[str, Any], synced_at: str = "") -> lis
 
     Args:
         response: Raw API response from getHistories.
-        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of balance dicts with keys: date, user_account_id, balance.

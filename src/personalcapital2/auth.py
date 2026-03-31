@@ -29,8 +29,13 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
     Raises:
         SystemExit: On authentication failure.
     """
-    email = os.getenv("EMPOWER_EMAIL") or input("Email: ")
-    password = os.getenv("EMPOWER_PASSWORD") or getpass.getpass("Password: ")
+    try:
+        email = os.getenv("EMPOWER_EMAIL") or input("Email: ")
+        password = os.getenv("EMPOWER_PASSWORD") or getpass.getpass("Password: ")
+    except EOFError:
+        raise SystemExit(
+            "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
+        ) from None
 
     client = EmpowerClient(session_path=session_path)
 

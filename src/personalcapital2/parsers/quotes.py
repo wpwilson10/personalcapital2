@@ -26,16 +26,13 @@ _KNOWN_KEYS = frozenset(
 )
 
 
-def parse_portfolio_vs_benchmark(
-    response: dict[str, Any], synced_at: str = ""
-) -> list[dict[str, Any]]:
+def parse_portfolio_vs_benchmark(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse getQuotes -> histories into portfolio vs benchmark dicts.
 
     Extracts the "YOU" (portfolio) and "^INX" (S&P 500) series.
 
     Args:
         response: Raw API response from getQuotes.
-        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of dicts with keys: date, portfolio_value, sp500_value.

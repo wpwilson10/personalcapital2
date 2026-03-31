@@ -36,7 +36,7 @@ from personalcapital2.models import (
     PerformanceResult,
     PortfolioSnapshot,
     QuotesResult,
-    SpendingSummary,
+    SpendingResult,
     TransactionsResult,
     account_balance_from_dict,
     account_from_dict,
@@ -328,16 +328,21 @@ class EmpowerClient:
             market_quotes=tuple(market_quote_from_dict(r) for r in quote_rows),
         )
 
-    def get_spending(
-        self, start: date, end: date, interval: str = "MONTH"
-    ) -> list[SpendingSummary]:
+    _VALID_SPENDING_INTERVALS = frozenset({"MONTH", "WEEK", "YEAR"})
+
+    def get_spending(self, start: date, end: date, interval: str = "MONTH") -> SpendingResult:
         """Fetch spending summary for a date range.
 
         Args:
             start: Start date.
             end: End date.
             interval: Interval type — MONTH, WEEK, or YEAR.
+
+        Raises:
+            ValueError: If interval is not MONTH, WEEK, or YEAR.
         """
+        if interval not in self._VALID_SPENDING_INTERVALS:
+            raise ValueError(f"Invalid interval {interval!r} — must be one of: MONTH, WEEK, YEAR")
         response = self.fetch(
             "/account/getUserSpending",
             {
@@ -347,7 +352,9 @@ class EmpowerClient:
             },
         )
         rows = parse_spending(response)
-        return [spending_summary_from_dict(r) for r in rows]
+        return SpendingResult(
+            intervals=tuple(spending_summary_from_dict(r) for r in rows),
+        )
 
     # --- Data Fetching ---
 

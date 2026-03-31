@@ -637,17 +637,18 @@ def test_get_spending_happy_path() -> None:
         ),
     )
     client = _make_client()
-    from personalcapital2.models import SpendingSummary
+    from personalcapital2.models import SpendingResult, SpendingSummary
 
     result = client.get_spending(date(2026, 1, 1), date(2026, 3, 31))
 
-    assert len(result) == 1
-    assert isinstance(result[0], SpendingSummary)
-    assert result[0].type == "MONTH"
-    assert result[0].average == Decimal("3683.74")
-    assert result[0].current == Decimal("3673.54")
-    assert len(result[0].details) == 1
-    assert result[0].details[0].amount == Decimal("516.88")
+    assert isinstance(result, SpendingResult)
+    assert len(result.intervals) == 1
+    assert isinstance(result.intervals[0], SpendingSummary)
+    assert result.intervals[0].type == "MONTH"
+    assert result.intervals[0].average == Decimal("3683.74")
+    assert result.intervals[0].current == Decimal("3673.54")
+    assert len(result.intervals[0].details) == 1
+    assert result.intervals[0].details[0].amount == Decimal("516.88")
 
 
 @responses.activate
@@ -657,7 +658,7 @@ def test_get_spending_empty() -> None:
         json=_success_response({"intervals": []}),
     )
     client = _make_client()
-    assert client.get_spending(date(2026, 1, 1), date(2026, 3, 31)) == []
+    assert client.get_spending(date(2026, 1, 1), date(2026, 3, 31)).intervals == ()
 
 
 @responses.activate
@@ -671,3 +672,12 @@ def test_get_spending_sends_interval_param() -> None:
 
     body = str(responses.calls[0].request.body)
     assert "intervalType=WEEK" in body
+
+
+def test_get_spending_rejects_invalid_interval() -> None:
+    client = _make_client()
+    with pytest.raises(ValueError, match="Invalid interval"):
+        client.get_spending(date(2026, 1, 1), date(2026, 3, 31), "month")
+
+    with pytest.raises(ValueError, match="Invalid interval"):
+        client.get_spending(date(2026, 1, 1), date(2026, 3, 31), "DAY")

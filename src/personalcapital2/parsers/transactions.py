@@ -95,7 +95,7 @@ def extract_categories(response: dict[str, Any]) -> list[dict[str, Any]]:
     return categories
 
 
-def parse_transactions(response: dict[str, Any], synced_at: str = "") -> list[dict[str, Any]]:
+def parse_transactions(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse getUserTransactions response into transaction row dicts.
 
     All values are passed through from the API without modification.
@@ -108,7 +108,6 @@ def parse_transactions(response: dict[str, Any], synced_at: str = "") -> list[di
 
     Args:
         response: Raw API response from getUserTransactions.
-        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of transaction dicts with normalized keys.

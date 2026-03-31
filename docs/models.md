@@ -63,6 +63,14 @@ Returned by `client.get_quotes(start, end)`.
 | `snapshot` | `PortfolioSnapshot` |
 | `market_quotes` | `tuple[MarketQuote, ...]` |
 
+### SpendingResult
+
+Returned by `client.get_spending(start, end, interval)`.
+
+| Field | Type |
+|---|---|
+| `intervals` | `tuple[SpendingSummary, ...]` |
+
 ## Data Models
 
 ### Account

@@ -27,7 +27,7 @@ def test_parse_basic_account() -> None:
             }
         ]
     )
-    rows = parse_accounts(response, "2026-03-14T10:00:00")
+    rows = parse_accounts(response)
     assert len(rows) == 1
     row = rows[0]
     assert row["user_account_id"] == 123
@@ -55,7 +55,7 @@ def test_closed_account() -> None:
             }
         ]
     )
-    rows = parse_accounts(response, "2026-03-14T10:00:00")
+    rows = parse_accounts(response)
     assert len(rows) == 1
     assert rows[0]["is_closed"] is True
 
@@ -75,14 +75,14 @@ def test_fallback_to_account_type_when_no_new() -> None:
             }
         ]
     )
-    rows = parse_accounts(response, "2026-03-14T10:00:00")
+    rows = parse_accounts(response)
     assert rows[0]["account_type"] == "Savings"
     assert rows[0]["created_at"] is None  # createdDate of 0 should be None
 
 
 def test_empty_response() -> None:
     response = _make_response([])
-    rows = parse_accounts(response, "2026-03-14T10:00:00")
+    rows = parse_accounts(response)
     assert rows == []
 
 
@@ -109,7 +109,7 @@ def test_malformed_account_skipped_not_crash() -> None:
         "closedDate": "",
     }
     response = _make_response([malformed, valid])
-    rows = parse_accounts(response, "2026-03-14T10:00:00")
+    rows = parse_accounts(response)
     assert len(rows) == 1
     assert rows[0]["user_account_id"] == 123
 
@@ -131,13 +131,13 @@ def test_account_id_defaults_to_empty_string() -> None:
             }
         ]
     )
-    rows = parse_accounts(response, "2026-03-14T10:00:00")
+    rows = parse_accounts(response)
     assert len(rows) == 1
     assert rows[0]["account_id"] == ""
 
 
 def test_missing_sp_data() -> None:
-    rows = parse_accounts({}, "2026-03-14T10:00:00")
+    rows = parse_accounts({})
     assert rows == []
 
 

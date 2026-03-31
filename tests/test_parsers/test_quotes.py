@@ -19,7 +19,7 @@ def test_parse_both_series() -> None:
             ]
         }
     }
-    rows = parse_portfolio_vs_benchmark(response, "2026-03-14T10:00:00")
+    rows = parse_portfolio_vs_benchmark(response)
     assert len(rows) == 2
     assert rows[0]["portfolio_value"] == Decimal("302.45")
     assert rows[0]["sp500_value"] == Decimal("351.4")
@@ -35,7 +35,7 @@ def test_missing_you_series() -> None:
             ]
         }
     }
-    rows = parse_portfolio_vs_benchmark(response, "2026-03-14T10:00:00")
+    rows = parse_portfolio_vs_benchmark(response)
     assert len(rows) == 1
     assert rows[0]["portfolio_value"] is None
     assert rows[0]["sp500_value"] == Decimal("0.0")
@@ -49,13 +49,13 @@ def test_skips_entries_with_neither_series() -> None:
             ]
         }
     }
-    rows = parse_portfolio_vs_benchmark(response, "2026-03-14T10:00:00")
+    rows = parse_portfolio_vs_benchmark(response)
     assert rows == []
 
 
 def test_empty_histories() -> None:
     response: dict[str, object] = {"spData": {"histories": []}}
-    assert parse_portfolio_vs_benchmark(response, "2026-03-14T10:00:00") == []
+    assert parse_portfolio_vs_benchmark(response) == []
 
 
 # --- parse_portfolio_snapshot and parse_market_quotes ---

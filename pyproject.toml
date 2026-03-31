@@ -20,6 +20,10 @@ dependencies = [
     "requests>=2.31",
 ]
 
+[project.urls]
+Repository = "https://github.com/wpwilson10/personalcapital2"
+Issues = "https://github.com/wpwilson10/personalcapital2/issues"
+
 [project.scripts]
 pc2 = "personalcapital2.cli:main"
 

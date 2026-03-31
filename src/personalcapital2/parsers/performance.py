@@ -25,9 +25,7 @@ _KNOWN_PERF_KEYS = frozenset(
 _KNOWN_BENCH_KEYS = frozenset({"date"})
 
 
-def parse_investment_performance(
-    response: dict[str, Any], synced_at: str = ""
-) -> list[dict[str, Any]]:
+def parse_investment_performance(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse performanceHistory into per-account investment performance dicts.
 
     Extracts per-account cumulative returns, filtering out annotation keys
@@ -35,7 +33,6 @@ def parse_investment_performance(
 
     Args:
         response: Raw API response from getPerformanceHistories.
-        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of performance dicts with keys: date, user_account_id, performance.
@@ -77,14 +74,11 @@ def parse_investment_performance(
     return rows
 
 
-def parse_benchmark_performance(
-    response: dict[str, Any], synced_at: str = ""
-) -> list[dict[str, Any]]:
+def parse_benchmark_performance(response: dict[str, Any]) -> list[dict[str, Any]]:
     """Parse benchmarkPerformanceHistory into benchmark performance dicts.
 
     Args:
         response: Raw API response from getPerformanceHistories.
-        synced_at: Deprecated, unused. Kept for backward compatibility.
 
     Returns:
         List of benchmark dicts with keys: date, benchmark, performance.
