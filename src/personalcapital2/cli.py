@@ -465,7 +465,7 @@ def build_parser() -> AgentArgumentParser:
         "--session",
         type=Path,
         default=argparse.SUPPRESS,
-        help=f"session file path (default: {DEFAULT_SESSION_PATH})",
+        help=f"session file path (env: PC2_SESSION_PATH, default: {DEFAULT_SESSION_PATH})",
     )
 
     parser = AgentArgumentParser(
@@ -502,7 +502,7 @@ examples:
         "--session",
         type=Path,
         default=DEFAULT_SESSION_PATH,
-        help=f"session file path (default: {DEFAULT_SESSION_PATH})",
+        help=f"session file path (env: PC2_SESSION_PATH, default: {DEFAULT_SESSION_PATH})",
     )
 
     sub = parser.add_subparsers(dest="command")

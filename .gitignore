@@ -17,4 +17,6 @@ build/
 data/
 scripts/
 .claude/
+designs/
 docs/phase4_plan.md
+docs/roadmap.md

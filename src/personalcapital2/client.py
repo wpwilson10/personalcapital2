@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import date
 from decimal import Decimal
@@ -86,7 +87,10 @@ LOGIN_PAGE = f"{BASE_URL}/page/login/goHome"
 CSRF_PATTERN = re.compile(r"window\.csrf\s*=\s*'([a-f0-9-]+)'")
 
 DEFAULT_SESSION_DIR = Path("~/.config/personalcapital2").expanduser()
-DEFAULT_SESSION_PATH = DEFAULT_SESSION_DIR / "session.json"
+_env_session = os.environ.get("PC2_SESSION_PATH")
+DEFAULT_SESSION_PATH = (
+    Path(_env_session).expanduser() if _env_session else DEFAULT_SESSION_DIR / "session.json"
+)
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
