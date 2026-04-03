@@ -20,6 +20,9 @@ dependencies = [
     "requests>=2.31",
 ]
 
+[project.optional-dependencies]
+mcp = ["mcp>=1.0,<2.0"]
+
 [project.urls]
 Repository = "https://github.com/wpwilson10/personalcapital2"
 Issues = "https://github.com/wpwilson10/personalcapital2/issues"
@@ -35,6 +38,8 @@ dev = [
 
     "pre-commit>=4.0",
     "responses>=0.25",
+    "mcp>=1.0,<2.0",
+    "anyio[pytest]>=4.0",
 ]
 
 [tool.pyright]
@@ -44,8 +49,25 @@ reportUnnecessaryTypeIgnoreComment = true
 exclude = ["scripts", ".venv"]
 
 [[tool.pyright.executionEnvironments]]
+root = "src/personalcapital2/mcp_server.py"
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportUnknownParameterType = false
+reportUntypedFunctionDecorator = false
+reportUnusedFunction = false
+reportMissingTypeArgument = false
+reportMissingImports = false
+
+[[tool.pyright.executionEnvironments]]
 root = "tests"
 reportPrivateUsage = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportUnknownParameterType = false
+reportUntypedFunctionDecorator = false
+reportMissingImports = false
 
 [tool.ruff]
 target-version = "py312"

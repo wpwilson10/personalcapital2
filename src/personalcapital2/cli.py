@@ -19,7 +19,6 @@ import json
 import re
 import sys
 from datetime import date, timedelta
-from decimal import Decimal
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
@@ -27,6 +26,7 @@ from typing import TYPE_CHECKING, NoReturn
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+from personalcapital2._serialization import json_default as _json_default
 from personalcapital2.auth import authenticate
 from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
 from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
@@ -129,27 +129,6 @@ def _parse_account_ids(s: str) -> list[int]:
         raise argparse.ArgumentTypeError(
             f"invalid account-ids '{s}': must be comma-separated integers"
         ) from None
-
-
-def _json_default(obj: object) -> int | float | str:
-    """JSON serializer for Decimal and date objects.
-
-    Decimals that are exact integers serialize as int (e.g. 150000 not 150000.0).
-    All other Decimals serialize as float, which is lossless for values within
-    float64 range - sufficient for financial data (IEEE 754 has 15-17 significant
-    digits, far exceeding any dollar amount or percentage the API returns).
-
-    Dates serialize as ISO-8601 strings.
-
-    Raises TypeError for any other type to avoid silently masking bugs.
-    """
-    if isinstance(obj, Decimal):
-        if obj == obj.to_integral_value():
-            return int(obj)
-        return float(obj)
-    if isinstance(obj, date):
-        return obj.isoformat()
-    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def _serialize_json(items: Sequence[object]) -> str:
@@ -397,6 +376,21 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
             "market_quotes": [dataclasses.asdict(q) for q in result.market_quotes],
         }
         sys.stdout.write(json.dumps(output, default=_json_default, indent=2) + "\n")
+
+
+def cmd_mcp(args: argparse.Namespace) -> None:
+    """Start the MCP tool server (stdio transport)."""
+    try:
+        from personalcapital2 import mcp_server
+    except ImportError:
+        _error(
+            "MCP support requires the [mcp] extra: pip install personalcapital2[mcp]",
+            "ImportError",
+            EXIT_USAGE,
+        )
+    session_path = Path(args.session)
+    server = mcp_server.create_server(session_path=session_path)
+    server.run()
 
 
 def cmd_raw(args: argparse.Namespace) -> None:
@@ -715,6 +709,32 @@ examples:
         help="request data (repeatable)",
     )
     raw_p.set_defaults(func=cmd_raw)
+
+    # MCP server
+    mcp_p = sub.add_parser(
+        "mcp",
+        parents=[_common],
+        help="start MCP tool server (requires: pip install personalcapital2[mcp])",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+starts an MCP tool server over stdio. Requires the [mcp] extra.
+
+install:
+  pip install personalcapital2[mcp]
+
+client config (Claude Code / Claude Desktop):
+  {
+    "mcpServers": {
+      "empower": {
+        "type": "stdio",
+        "command": "pc2",
+        "args": ["mcp"],
+        "env": {"PC2_SESSION_PATH": "~/.config/personalcapital2/session.json"}
+      }
+    }
+  }""",
+    )
+    mcp_p.set_defaults(func=cmd_mcp)
 
     return parser
 
