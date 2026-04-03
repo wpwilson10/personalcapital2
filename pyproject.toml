@@ -60,7 +60,7 @@ reportMissingTypeArgument = false
 reportMissingImports = false
 
 [[tool.pyright.executionEnvironments]]
-root = "tests"
+root = "tests/test_mcp_server.py"
 reportPrivateUsage = false
 reportUnknownMemberType = false
 reportUnknownArgumentType = false
@@ -68,6 +68,10 @@ reportUnknownVariableType = false
 reportUnknownParameterType = false
 reportUntypedFunctionDecorator = false
 reportMissingImports = false
+
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = false
 
 [tool.ruff]
 target-version = "py312"

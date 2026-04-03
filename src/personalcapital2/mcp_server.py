@@ -22,6 +22,7 @@ Client config (Claude Code / Claude Desktop):
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections.abc import AsyncIterator, Sequence  # noqa: TC003 — needed at runtime by SDK
 from contextlib import asynccontextmanager
 from datetime import date  # noqa: TC003 — needed at runtime by Pydantic schema generation
@@ -201,7 +202,6 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
 def _serialize_list(items: Sequence[object]) -> str:
     """Serialize a list of dataclass instances to a JSON array string."""
-    import json
 
     rows = [dataclasses.asdict(item) for item in items]  # pyright: ignore[reportArgumentType] — items are dataclass instances
     return json.dumps(rows, default=json_default, indent=2)
