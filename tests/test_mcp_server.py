@@ -17,7 +17,12 @@ import requests
 mcp_sdk = pytest.importorskip("mcp", reason="mcp extra not installed")
 
 from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError  # noqa: E402
-from personalcapital2.mcp_server import _validate_date_range, create_server  # noqa: E402
+from personalcapital2.mcp_server import (  # noqa: E402
+    _apply_limit,
+    _enforce_char_cap,
+    _validate_date_range,
+    create_server,
+)
 from personalcapital2.models import (  # noqa: E402
     Account,
     AccountBalance,
@@ -599,3 +604,191 @@ async def test_all_eight_tools_registered(server: Any) -> None:
         "get_spending",
     }
     assert names == expected
+
+
+# --- Transaction limit tests ---
+
+
+def _make_many_transactions(n: int) -> TransactionsResult:
+    """Create a TransactionsResult with n transactions."""
+    txns = tuple(
+        Transaction(
+            user_transaction_id=i,
+            user_account_id=1,
+            date=date(2026, 3, 15),
+            amount=Decimal("10.00"),
+            is_cash_in=False,
+            is_income=False,
+            is_spending=True,
+            description=f"Transaction {i}",
+            original_description=f"TXN {i}",
+            simple_description=None,
+            category_id=7,
+            merchant=None,
+            transaction_type=None,
+            sub_type=None,
+            status="posted",
+            currency="USD",
+            merchant_id=None,
+            merchant_type=None,
+            is_duplicate=False,
+        )
+        for i in range(n)
+    )
+    return TransactionsResult(
+        transactions=txns,
+        categories=(Category(category_id=7, name="Dining", type="EXPENSE"),),
+        summary=TransactionsSummary(
+            money_in=Decimal("0"),
+            money_out=Decimal(str(n * 10)),
+            net_cashflow=Decimal(str(n * -10)),
+            average_in=Decimal("0"),
+            average_out=Decimal("10"),
+            start_date=date(2026, 3, 1),
+            end_date=date(2026, 3, 31),
+        ),
+    )
+
+
+async def test_transactions_default_limit(server: Any, mock_client: MagicMock) -> None:
+    """Default limit=100 should truncate when there are more than 100 transactions."""
+    mock_client.get_transactions.return_value = _make_many_transactions(150)
+    # Use a large char cap so only the limit is tested, not the cap
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(
+            server,
+            "get_transactions",
+            {"start_date": "2026-03-01", "end_date": "2026-03-31"},
+            mock_client=mock_client,
+        )
+    data = json.loads(text)
+    assert len(data["transactions"]) == 100
+    assert data["truncated"]["field"] == "transactions"
+    assert data["truncated"]["showing"] == 100
+    assert data["truncated"]["total"] == 150
+    # Summary and categories always present
+    assert "summary" in data
+    assert "categories" in data
+
+
+async def test_transactions_custom_limit(server: Any, mock_client: MagicMock) -> None:
+    """Custom limit should be respected."""
+    mock_client.get_transactions.return_value = _make_many_transactions(50)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(
+            server,
+            "get_transactions",
+            {"start_date": "2026-03-01", "end_date": "2026-03-31", "limit": 10},
+            mock_client=mock_client,
+        )
+    data = json.loads(text)
+    assert len(data["transactions"]) == 10
+    assert data["truncated"]["showing"] == 10
+    assert data["truncated"]["total"] == 50
+
+
+async def test_transactions_no_truncation_when_under_limit(
+    server: Any, mock_client: MagicMock
+) -> None:
+    """No truncated field when transactions are under the limit."""
+    mock_client.get_transactions.return_value = _make_many_transactions(5)
+    text = await _call_tool(
+        server,
+        "get_transactions",
+        {"start_date": "2026-03-01", "end_date": "2026-03-31"},
+        mock_client=mock_client,
+    )
+    data = json.loads(text)
+    assert len(data["transactions"]) == 5
+    assert "truncated" not in data
+
+
+async def test_transactions_summary_always_present(server: Any, mock_client: MagicMock) -> None:
+    """Summary and categories must be present even when transactions are truncated."""
+    mock_client.get_transactions.return_value = _make_many_transactions(200)
+    text = await _call_tool(
+        server,
+        "get_transactions",
+        {"start_date": "2026-03-01", "end_date": "2026-03-31", "limit": 5},
+        mock_client=mock_client,
+    )
+    data = json.loads(text)
+    assert len(data["transactions"]) == 5
+    assert data["summary"]["money_out"] == 2000  # Full summary, not truncated
+    assert len(data["categories"]) == 1
+
+
+# --- Character cap tests ---
+
+
+def test_apply_limit_under_limit() -> None:
+    """_apply_limit should pass through when under limit."""
+    data = json.dumps({"items": [1, 2, 3], "summary": "ok"})
+    result = _apply_limit(data, "items", 10)
+    assert result == data  # Unchanged
+
+
+def test_apply_limit_over_limit() -> None:
+    """_apply_limit should truncate and add metadata."""
+    data = json.dumps({"items": list(range(20)), "summary": "ok"})
+    result = _apply_limit(data, "items", 5)
+    parsed = json.loads(result)
+    assert len(parsed["items"]) == 5
+    assert parsed["truncated"]["field"] == "items"
+    assert parsed["truncated"]["showing"] == 5
+    assert parsed["truncated"]["total"] == 20
+    assert parsed["summary"] == "ok"  # Other fields untouched
+
+
+def test_enforce_char_cap_under_limit() -> None:
+    """_enforce_char_cap should pass through small outputs."""
+    small = json.dumps({"entries": [1, 2, 3]})
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "10000"}):
+        result = _enforce_char_cap(small)
+    assert result == small
+
+
+def test_enforce_char_cap_over_limit() -> None:
+    """_enforce_char_cap should truncate the largest list and add metadata."""
+    # Create output that exceeds 500 chars
+    big_list = [{"value": f"item-{i:04d}", "data": "x" * 50} for i in range(100)]
+    data = json.dumps({"entries": big_list, "summary": {"total": 100}}, indent=2)
+    assert len(data) > 500  # Sanity check
+
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "500"}):
+        result = _enforce_char_cap(data)
+
+    assert len(result) <= 500
+    parsed = json.loads(result)
+    assert parsed["truncated"]["field"] == "entries"
+    assert parsed["truncated"]["total"] == 100
+    assert parsed["truncated"]["showing"] < 100
+    assert "hint" in parsed["truncated"]
+    assert parsed["summary"] == {"total": 100}  # Summary untouched
+
+
+def test_enforce_char_cap_env_var_override() -> None:
+    """PC2_MCP_MAX_CHARS env var should override the default."""
+    big_list = list(range(200))
+    data = json.dumps({"items": big_list}, indent=2)
+
+    # With a very small cap, it should truncate
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "100"}):
+        result = _enforce_char_cap(data)
+    parsed = json.loads(result)
+    assert "truncated" in parsed
+
+    # With a large cap, it should pass through
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        result = _enforce_char_cap(data)
+    assert json.loads(result) == {"items": big_list}
+
+
+def test_enforce_char_cap_no_list_fields() -> None:
+    """_enforce_char_cap should not crash when there are no list fields to truncate."""
+    # Create a large string-only payload
+    data = json.dumps({"text": "x" * 1000, "number": 42})
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "100"}):
+        result = _enforce_char_cap(data)
+    # Can't truncate — returns original
+    assert result == data

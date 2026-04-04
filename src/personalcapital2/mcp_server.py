@@ -22,7 +22,9 @@ Client config (Claude Code / Claude Desktop):
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
+import os
 from collections.abc import (
     AsyncIterator,  # noqa: TC003 — needed at runtime by SDK
 )
@@ -30,7 +32,7 @@ from contextlib import asynccontextmanager
 from datetime import date  # noqa: TC003 — needed at runtime by Pydantic schema generation
 from functools import wraps
 from pathlib import Path  # noqa: TC003 — needed at runtime by lifespan
-from typing import Literal
+from typing import Any, Literal
 
 import requests
 from mcp.server.fastmcp import Context, FastMCP
@@ -40,6 +42,8 @@ from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
 from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
 
 log = logging.getLogger(__name__)
+
+_DEFAULT_MAX_CHARS = 50_000
 
 
 @dataclasses.dataclass
@@ -63,6 +67,88 @@ def _validate_date_range(start_date: date, end_date: date) -> str | None:
             "Swap them so start_date <= end_date."
         )
     return None
+
+
+def _get_max_chars() -> int:
+    """Read max output characters from environment, falling back to default."""
+    env = os.environ.get("PC2_MCP_MAX_CHARS")
+    if env is not None:
+        try:
+            return int(env)
+        except ValueError:
+            log.warning("Invalid PC2_MCP_MAX_CHARS=%r, using default %d", env, _DEFAULT_MAX_CHARS)
+    return _DEFAULT_MAX_CHARS
+
+
+def _apply_limit(serialized: str, field: str, limit: int) -> str:
+    """Limit a specific list field in serialized JSON output.
+
+    If the field has more than ``limit`` items, truncates the list and adds
+    a ``truncated`` metadata field to the JSON output.
+    """
+    data: dict[str, Any] = json.loads(serialized)
+    items = data.get(field)
+    if not isinstance(items, list) or len(items) <= limit:
+        return serialized
+    total = len(items)
+    data[field] = items[:limit]
+    data["truncated"] = {"field": field, "showing": limit, "total": total}
+    return json.dumps(data, indent=2)
+
+
+def _enforce_char_cap(serialized: str) -> str:
+    """Truncate the largest list field if output exceeds the character cap.
+
+    Uses binary search to find the maximum number of items that fit within
+    the cap. Adds a ``truncated`` metadata field when truncation occurs.
+
+    The cap is configurable via the ``PC2_MCP_MAX_CHARS`` environment variable
+    (default: 50,000 characters, roughly 12,500 tokens).
+    """
+    max_chars = _get_max_chars()
+    if len(serialized) <= max_chars:
+        return serialized
+
+    data: dict[str, Any] = json.loads(serialized)
+
+    # Find the largest list field
+    largest_key: str | None = None
+    largest_len = 0
+    for key, value in data.items():
+        if isinstance(value, list) and len(value) > largest_len:
+            largest_key = key
+            largest_len = len(value)
+
+    if largest_key is None or largest_len == 0:
+        return serialized  # No list field to truncate
+
+    items: list[Any] = data[largest_key]
+    total = len(items)
+
+    # Binary search for the maximum number of items that fit
+    lo, hi = 0, total
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        data[largest_key] = items[:mid]
+        data["truncated"] = {
+            "field": largest_key,
+            "showing": mid,
+            "total": total,
+            "hint": "Narrow the date range or request fewer accounts.",
+        }
+        if len(json.dumps(data, indent=2)) <= max_chars:
+            lo = mid
+        else:
+            hi = mid - 1
+
+    data[largest_key] = items[:lo]
+    data["truncated"] = {
+        "field": largest_key,
+        "showing": lo,
+        "total": total,
+        "hint": "Narrow the date range or request fewer accounts.",
+    }
+    return json.dumps(data, indent=2)
 
 
 def _handle_tool_errors(fn: object) -> object:
@@ -136,19 +222,23 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         """
         client = _get_client(ctx)
         result = client.get_accounts()
-        return serialize_result(result)
+        return _enforce_char_cap(serialize_result(result))
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_transactions(ctx: Context, start_date: date, end_date: date) -> str:
+    def get_transactions(ctx: Context, start_date: date, end_date: date, limit: int = 100) -> str:
         """Fetch transactions within a date range.
 
         Returns transactions with amounts, descriptions, categories, and merchant info,
         plus unique categories and a cashflow summary (money in, money out, net).
+        The summary and categories are always returned in full regardless of limit.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
+            limit: Maximum number of transactions to return (default 100).
+                Use a smaller value for quick lookups or a larger value when
+                you need more detail. Summary is always complete.
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`)
         or if start_date is after end_date.
@@ -157,7 +247,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_transactions(start_date, end_date)
-        return serialize_result(result)
+        output = serialize_result(result)
+        output = _apply_limit(output, "transactions", limit)
+        return _enforce_char_cap(output)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -172,7 +264,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         """
         client = _get_client(ctx)
         result = client.get_holdings()
-        return serialize_result(result)
+        return _enforce_char_cap(serialize_result(result))
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -193,14 +285,14 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_net_worth(start_date, end_date)
-        return serialize_result(result)
+        return _enforce_char_cap(serialize_result(result))
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
     def get_account_balances(ctx: Context, start_date: date, end_date: date) -> str:
         """Fetch daily account balance history for all accounts.
 
-        Returns balances grouped by date, each with account ID and balance amount.
+        Returns daily balances for each account, with account ID and balance amount.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
@@ -213,7 +305,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_account_balances(start_date, end_date)
-        return serialize_result(result)
+        return _enforce_char_cap(serialize_result(result))
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -222,6 +314,10 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     ) -> str:
         """Fetch daily investment performance and benchmark comparisons.
 
+        Use get_holdings (not get_accounts) to discover account IDs — get_accounts
+        may not list all accounts that have holdings (e.g. employer 401k plans,
+        crypto exchanges). For large portfolios, query a few accounts at a time.
+
         Returns daily investment performance per account, daily benchmark (S&P 500)
         performance, and per-account summaries with balance, fees, income, and returns.
 
@@ -229,8 +325,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             account_ids: List of investment account IDs (integers). Use get_holdings to
-                find user_account_id values for investment accounts — get_accounts may
-                not include all accounts that have holdings (e.g. employer 401k plans).
+                find user_account_id values for investment accounts.
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`)
         or if start_date is after end_date.
@@ -239,7 +334,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_performance(start_date, end_date, account_ids)
-        return serialize_result(result)
+        return _enforce_char_cap(serialize_result(result))
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -260,7 +355,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_quotes(start_date, end_date)
-        return serialize_result(result)
+        return _enforce_char_cap(serialize_result(result))
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -270,17 +365,18 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         end_date: date,
         interval: Literal["MONTH", "WEEK", "YEAR"] = "MONTH",
     ) -> str:
-        """Fetch current spending summary.
+        """Fetch current spending summary. The API ignores date range and interval
+        parameters — it always returns current-period spending for all three
+        interval types (MONTH, WEEK, YEAR) regardless of what you send.
 
-        Returns spending data for all three interval types (MONTH, WEEK, YEAR)
-        with average, current, and target amounts plus daily details within each.
-
-        Note: the Empower API always returns current-period spending for all three
-        interval types, regardless of the date range or interval parameter.
+        Returns spending data with average, current, and target amounts plus
+        daily details within each interval.
 
         Args:
-            start_date: Start of date range (ISO format: YYYY-MM-DD).
-            end_date: End of date range (ISO format: YYYY-MM-DD).
+            start_date: Start of date range (ISO format: YYYY-MM-DD). Sent to API
+                but has no observable effect on results.
+            end_date: End of date range (ISO format: YYYY-MM-DD). Sent to API
+                but has no observable effect on results.
             interval: Sent to API but has no observable effect — all three intervals
                 are always returned. Defaults to MONTH.
 
@@ -291,6 +387,6 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_spending(start_date, end_date, interval)
-        return serialize_result(result)
+        return _enforce_char_cap(serialize_result(result))
 
     return mcp
