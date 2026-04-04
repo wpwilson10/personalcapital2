@@ -607,6 +607,13 @@ class NetWorthResult:
 
 
 @dataclass(frozen=True)
+class AccountBalancesResult:
+    """Response container for get_account_balances()."""
+
+    balances: tuple[AccountBalance, ...]
+
+
+@dataclass(frozen=True)
 class PerformanceResult:
     """Response container for get_performance()."""
 

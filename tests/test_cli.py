@@ -29,6 +29,7 @@ from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
 from personalcapital2.models import (
     Account,
     AccountBalance,
+    AccountBalancesResult,
     AccountsResult,
     AccountsSummary,
     BenchmarkPerformance,
@@ -712,7 +713,7 @@ def test_cmd_balances_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance._load_session = MagicMock()
-        instance.get_account_balances.return_value = [bal]
+        instance.get_account_balances.return_value = AccountBalancesResult(balances=(bal,))
         main(["--session", str(session), "balances", "--start", "mb", "--end", "today"])
 
     captured = capsys.readouterr()

@@ -30,7 +30,7 @@ from urllib3.util.retry import Retry
 
 from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, TwoFactorRequiredError
 from personalcapital2.models import (
-    AccountBalance,
+    AccountBalancesResult,
     AccountsResult,
     HoldingsResult,
     NetWorthResult,
@@ -263,7 +263,7 @@ class EmpowerClient:
             summary=net_worth_summary_from_dict(summary_dict),
         )
 
-    def get_account_balances(self, start: date, end: date) -> list[AccountBalance]:
+    def get_account_balances(self, start: date, end: date) -> AccountBalancesResult:
         """Fetch daily account balance history for a date range."""
         response = self.fetch(
             "/account/getHistories",
@@ -276,7 +276,9 @@ class EmpowerClient:
             },
         )
         rows = parse_account_balances(response)
-        return [account_balance_from_dict(r) for r in rows]
+        return AccountBalancesResult(
+            balances=tuple(account_balance_from_dict(r) for r in rows),
+        )
 
     def get_performance(self, start: date, end: date, account_ids: list[int]) -> PerformanceResult:
         """Fetch investment performance, benchmarks, and account summaries.

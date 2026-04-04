@@ -307,8 +307,8 @@ def cmd_balances(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     client = _make_client(session_path)
-    balances = client.get_account_balances(start, end)
-    _output(balances, fmt)
+    result = client.get_account_balances(start, end)
+    _output(result.balances, fmt)
 
 
 def cmd_spending(args: argparse.Namespace) -> None:

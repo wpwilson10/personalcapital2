@@ -22,17 +22,24 @@ Client config (Claude Code / Claude Desktop):
 from __future__ import annotations
 
 import dataclasses
-import json
-from collections.abc import AsyncIterator, Sequence  # noqa: TC003 — needed at runtime by SDK
+import logging
+from collections.abc import (
+    AsyncIterator,  # noqa: TC003 — needed at runtime by SDK
+)
 from contextlib import asynccontextmanager
 from datetime import date  # noqa: TC003 — needed at runtime by Pydantic schema generation
+from functools import wraps
 from pathlib import Path  # noqa: TC003 — needed at runtime by lifespan
 from typing import Literal
 
+import requests
 from mcp.server.fastmcp import Context, FastMCP
 
-from personalcapital2._serialization import json_default, serialize_result
+from personalcapital2._serialization import serialize_result
 from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
+from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
+
+log = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
@@ -46,6 +53,44 @@ def _get_client(ctx: Context) -> EmpowerClient:
     """Extract the EmpowerClient from the MCP context."""
     app_ctx: _AppContext = ctx.request_context.lifespan_context
     return app_ctx.client
+
+
+def _validate_date_range(start_date: date, end_date: date) -> str | None:
+    """Return an error message if start_date > end_date, else None."""
+    if start_date > end_date:
+        return (
+            f"Error: start_date ({start_date}) is after end_date ({end_date}). "
+            "Swap them so start_date <= end_date."
+        )
+    return None
+
+
+def _handle_tool_errors(fn: object) -> object:
+    """Decorator that catches client exceptions and returns agent-friendly error strings.
+
+    Wraps tool functions so the LLM agent gets a readable error message
+    instead of a raw Python traceback.
+    """
+
+    @wraps(fn)
+    def wrapper(*args: object, **kwargs: object) -> str:
+        try:
+            return fn(*args, **kwargs)  # pyright: ignore[reportCallIssue] — fn is callable returning str
+        except EmpowerAuthError as exc:
+            log.warning("Auth error in tool call: %s", exc)
+            return (
+                f"Error: {exc}\n\n"
+                "Session is expired or invalid. "
+                "The user needs to re-authenticate by running: pc2 login"
+            )
+        except EmpowerAPIError as exc:
+            log.warning("API error in tool call: %s", exc)
+            return f"Error: {exc}"
+        except requests.RequestException as exc:
+            log.warning("Network error in tool call: %s", exc)
+            return f"Error: Network request failed — {exc}"
+
+    return wrapper
 
 
 def create_server(session_path: Path | None = None) -> FastMCP:
@@ -71,22 +116,30 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     )
 
     # --- Tools ---
+    #
+    # All tools are synchronous functions calling the requests-based EmpowerClient.
+    # FastMCP runs sync tools in a thread pool, so they won't block the event loop.
+    #
     # All tools use structured_output=False to avoid generating outputSchema,
     # which causes Claude Code to silently drop all tools (anthropics/claude-code#25081).
 
     @mcp.tool(structured_output=False)
+    @_handle_tool_errors
     def get_accounts(ctx: Context) -> str:
         """List all linked financial accounts with aggregate summary.
 
         Returns accounts with balances, types, and firm names, plus a summary
         with net worth, total assets, and total liabilities.
         No parameters required.
+
+        Errors: returns an error message if the session is expired (re-run `pc2 login`).
         """
         client = _get_client(ctx)
         result = client.get_accounts()
         return serialize_result(result)
 
     @mcp.tool(structured_output=False)
+    @_handle_tool_errors
     def get_transactions(ctx: Context, start_date: date, end_date: date) -> str:
         """Fetch transactions within a date range.
 
@@ -96,24 +149,33 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
+
+        Errors: returns an error message if the session is expired (re-run `pc2 login`)
+        or if start_date is after end_date.
         """
+        if err := _validate_date_range(start_date, end_date):
+            return err
         client = _get_client(ctx)
         result = client.get_transactions(start_date, end_date)
         return serialize_result(result)
 
     @mcp.tool(structured_output=False)
+    @_handle_tool_errors
     def get_holdings(ctx: Context) -> str:
         """Fetch current investment holdings across all accounts.
 
         Returns individual holdings with security info, quantities, prices,
         cost basis, and fees, plus the total portfolio value.
         No parameters required.
+
+        Errors: returns an error message if the session is expired (re-run `pc2 login`).
         """
         client = _get_client(ctx)
         result = client.get_holdings()
         return serialize_result(result)
 
     @mcp.tool(structured_output=False)
+    @_handle_tool_errors
     def get_net_worth(ctx: Context, start_date: date, end_date: date) -> str:
         """Fetch daily net worth history with change summary.
 
@@ -123,26 +185,38 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
+
+        Errors: returns an error message if the session is expired (re-run `pc2 login`)
+        or if start_date is after end_date.
         """
+        if err := _validate_date_range(start_date, end_date):
+            return err
         client = _get_client(ctx)
         result = client.get_net_worth(start_date, end_date)
         return serialize_result(result)
 
     @mcp.tool(structured_output=False)
+    @_handle_tool_errors
     def get_account_balances(ctx: Context, start_date: date, end_date: date) -> str:
         """Fetch daily account balance history for all accounts.
 
-        Returns a list of daily balance entries, each with date, account ID, and balance.
+        Returns balances grouped by date, each with account ID and balance amount.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
+
+        Errors: returns an error message if the session is expired (re-run `pc2 login`)
+        or if start_date is after end_date.
         """
+        if err := _validate_date_range(start_date, end_date):
+            return err
         client = _get_client(ctx)
-        balances = client.get_account_balances(start_date, end_date)
-        return _serialize_list(balances)
+        result = client.get_account_balances(start_date, end_date)
+        return serialize_result(result)
 
     @mcp.tool(structured_output=False)
+    @_handle_tool_errors
     def get_performance(
         ctx: Context, start_date: date, end_date: date, account_ids: list[int]
     ) -> str:
@@ -156,12 +230,18 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             account_ids: List of investment account IDs (integers). Get these from get_accounts.
+
+        Errors: returns an error message if the session is expired (re-run `pc2 login`)
+        or if start_date is after end_date.
         """
+        if err := _validate_date_range(start_date, end_date):
+            return err
         client = _get_client(ctx)
         result = client.get_performance(start_date, end_date, account_ids)
         return serialize_result(result)
 
     @mcp.tool(structured_output=False)
+    @_handle_tool_errors
     def get_quotes(ctx: Context, start_date: date, end_date: date) -> str:
         """Fetch portfolio vs S&P 500 comparison, portfolio snapshot, and market quotes.
 
@@ -171,12 +251,18 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
+
+        Errors: returns an error message if the session is expired (re-run `pc2 login`)
+        or if start_date is after end_date.
         """
+        if err := _validate_date_range(start_date, end_date):
+            return err
         client = _get_client(ctx)
         result = client.get_quotes(start_date, end_date)
         return serialize_result(result)
 
     @mcp.tool(structured_output=False)
+    @_handle_tool_errors
     def get_spending(
         ctx: Context,
         start_date: date,
@@ -192,16 +278,14 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             interval: Grouping interval — MONTH, WEEK, or YEAR. Defaults to MONTH.
+
+        Errors: returns an error message if the session is expired (re-run `pc2 login`)
+        or if start_date is after end_date.
         """
+        if err := _validate_date_range(start_date, end_date):
+            return err
         client = _get_client(ctx)
         result = client.get_spending(start_date, end_date, interval)
         return serialize_result(result)
 
     return mcp
-
-
-def _serialize_list(items: Sequence[object]) -> str:
-    """Serialize a list of dataclass instances to a JSON array string."""
-
-    rows = [dataclasses.asdict(item) for item in items]  # pyright: ignore[reportArgumentType] — items are dataclass instances
-    return json.dumps(rows, default=json_default, indent=2)

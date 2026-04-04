@@ -12,13 +12,16 @@ if TYPE_CHECKING:
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 mcp_sdk = pytest.importorskip("mcp", reason="mcp extra not installed")
 
-from personalcapital2.mcp_server import _serialize_list, create_server  # noqa: E402
+from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError  # noqa: E402
+from personalcapital2.mcp_server import _validate_date_range, create_server  # noqa: E402
 from personalcapital2.models import (  # noqa: E402
     Account,
     AccountBalance,
+    AccountBalancesResult,
     AccountPerformanceSummary,
     AccountsResult,
     AccountsSummary,
@@ -190,6 +193,14 @@ def _mock_net_worth_result() -> NetWorthResult:
     )
 
 
+def _mock_account_balances_result() -> AccountBalancesResult:
+    return AccountBalancesResult(
+        balances=(
+            AccountBalance(date=date(2026, 4, 1), user_account_id=1, balance=Decimal("5000.50")),
+        ),
+    )
+
+
 def _mock_performance_result() -> PerformanceResult:
     return PerformanceResult(
         investments=(
@@ -283,9 +294,7 @@ def mock_client() -> MagicMock:
     client.get_transactions.return_value = _mock_transactions_result()
     client.get_holdings.return_value = _mock_holdings_result()
     client.get_net_worth.return_value = _mock_net_worth_result()
-    client.get_account_balances.return_value = [
-        AccountBalance(date=date(2026, 4, 1), user_account_id=1, balance=Decimal("5000.50")),
-    ]
+    client.get_account_balances.return_value = _mock_account_balances_result()
     client.get_performance.return_value = _mock_performance_result()
     client.get_quotes.return_value = _mock_quotes_result()
     client.get_spending.return_value = _mock_spending_result()
@@ -404,9 +413,9 @@ async def test_get_account_balances(server: Any, mock_client: MagicMock) -> None
         mock_client=mock_client,
     )
     data = json.loads(text)
-    assert isinstance(data, list)
-    assert data[0]["user_account_id"] == 1
-    assert data[0]["balance"] == 5000.5
+    assert "balances" in data
+    assert data["balances"][0]["user_account_id"] == 1
+    assert data["balances"][0]["balance"] == 5000.5
 
 
 async def test_get_performance(server: Any, mock_client: MagicMock) -> None:
@@ -473,7 +482,71 @@ async def test_get_spending_with_interval(server: Any, mock_client: MagicMock) -
     assert "intervals" in data
 
 
-# --- Error tests ---
+# --- Error handling tests ---
+
+
+async def test_auth_error_returns_message(server: Any, mock_client: MagicMock) -> None:
+    """Auth errors should return a helpful message, not a traceback."""
+    mock_client.get_accounts.side_effect = EmpowerAuthError("Session expired")
+    text = await _call_tool(server, "get_accounts", mock_client=mock_client)
+    assert "Error:" in text
+    assert "Session expired" in text
+    assert "pc2 login" in text
+
+
+async def test_api_error_returns_message(server: Any, mock_client: MagicMock) -> None:
+    """API errors should return the error message."""
+    mock_client.get_transactions.side_effect = EmpowerAPIError("Rate limited")
+    text = await _call_tool(
+        server,
+        "get_transactions",
+        {"start_date": "2026-03-01", "end_date": "2026-03-31"},
+        mock_client=mock_client,
+    )
+    assert "Error:" in text
+    assert "Rate limited" in text
+
+
+async def test_network_error_returns_message(server: Any, mock_client: MagicMock) -> None:
+    """Network errors should return a readable message."""
+    mock_client.get_holdings.side_effect = requests.ConnectionError("DNS resolution failed")
+    text = await _call_tool(server, "get_holdings", mock_client=mock_client)
+    assert "Error:" in text
+    assert "Network request failed" in text
+
+
+# --- Date validation tests ---
+
+
+def test_validate_date_range_valid() -> None:
+    assert _validate_date_range(date(2026, 1, 1), date(2026, 3, 31)) is None
+
+
+def test_validate_date_range_same_day() -> None:
+    assert _validate_date_range(date(2026, 3, 15), date(2026, 3, 15)) is None
+
+
+def test_validate_date_range_reversed() -> None:
+    result = _validate_date_range(date(2026, 3, 31), date(2026, 1, 1))
+    assert result is not None
+    assert "start_date" in result
+    assert "end_date" in result
+
+
+async def test_reversed_dates_return_error(server: Any, mock_client: MagicMock) -> None:
+    """Tools should reject reversed date ranges without hitting the API."""
+    text = await _call_tool(
+        server,
+        "get_transactions",
+        {"start_date": "2026-04-01", "end_date": "2026-03-01"},
+        mock_client=mock_client,
+    )
+    assert "Error:" in text
+    assert "start_date" in text
+    mock_client.get_transactions.assert_not_called()
+
+
+# --- Server lifecycle tests ---
 
 
 async def test_missing_session_file(tmp_path: Path) -> None:
@@ -526,21 +599,3 @@ async def test_all_eight_tools_registered(server: Any) -> None:
         "get_spending",
     }
     assert names == expected
-
-
-# --- Serialization tests ---
-
-
-def test_serialize_list_with_account_balances() -> None:
-    items = [
-        AccountBalance(date=date(2026, 4, 1), user_account_id=1, balance=Decimal("5000.50")),
-        AccountBalance(date=date(2026, 4, 2), user_account_id=1, balance=Decimal("5100")),
-    ]
-    text = _serialize_list(items)
-    data = json.loads(text)
-    assert len(data) == 2
-    assert data[0]["date"] == "2026-04-01"
-    assert data[0]["balance"] == 5000.5
-    # Integer Decimals serialize as int
-    assert data[1]["balance"] == 5100
-    assert isinstance(data[1]["balance"], int)

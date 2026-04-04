@@ -10,6 +10,7 @@ from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, TwoFa
 from personalcapital2.models import (
     Account,
     AccountBalance,
+    AccountBalancesResult,
     AccountPerformanceSummary,
     AccountsResult,
     AccountsSummary,
@@ -38,6 +39,7 @@ from personalcapital2.types import TwoFactorMode
 __all__ = [
     "Account",
     "AccountBalance",
+    "AccountBalancesResult",
     "AccountPerformanceSummary",
     "AccountsResult",
     "AccountsSummary",

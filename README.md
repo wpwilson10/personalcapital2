@@ -64,12 +64,47 @@ See [CLI Reference](docs/cli.md) for all commands, date shortcuts, exit codes, a
 | `get_transactions(start, end)` | `TransactionsResult` | Transactions + categories + cashflow summary |
 | `get_holdings()` | `HoldingsResult` | Investment holdings + total value |
 | `get_net_worth(start, end)` | `NetWorthResult` | Daily net worth + change summary |
-| `get_account_balances(start, end)` | `list[AccountBalance]` | Daily account balances |
+| `get_account_balances(start, end)` | `AccountBalancesResult` | Daily account balances |
 | `get_performance(start, end, account_ids)` | `PerformanceResult` | Investment + benchmark performance |
 | `get_quotes(start, end)` | `QuotesResult` | Portfolio vs benchmark + market quotes |
 | `get_spending(start, end, interval)` | `SpendingResult` | Spending by interval (MONTH/WEEK/YEAR) |
 
 All dates are `datetime.date`, financial values are `decimal.Decimal`, models are frozen dataclasses. See [Python API docs](docs/api.md) for response containers and examples, [Model Reference](docs/models.md) for every field and type.
+
+## MCP Server
+
+An MCP tool server exposes all data methods to AI agents (Claude Code, Claude Desktop, etc.) over stdio. Requires the `[mcp]` extra:
+
+```bash
+pip install "personalcapital2[mcp]"
+```
+
+Start the server (requires a valid session from `pc2 login`):
+
+```bash
+pc2 mcp
+```
+
+### Client configuration
+
+Add to your MCP client config (Claude Code `settings.json`, Claude Desktop `claude_desktop_config.json`, etc.):
+
+```json
+{
+  "mcpServers": {
+    "empower": {
+      "type": "stdio",
+      "command": "pc2",
+      "args": ["mcp"],
+      "env": {"PC2_SESSION_PATH": "~/.config/personalcapital2/session.json"}
+    }
+  }
+}
+```
+
+All 8 data tools are available: `get_accounts`, `get_transactions`, `get_holdings`, `get_net_worth`, `get_account_balances`, `get_performance`, `get_quotes`, `get_spending`. Tools return JSON strings and handle errors gracefully — expired sessions return a message telling the agent to ask the user to re-run `pc2 login`.
+
+See [MCP Testing Guide](docs/mcp-testing.md) for how to test the server during development.
 
 ## Known API quirks
 

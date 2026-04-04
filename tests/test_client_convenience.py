@@ -14,6 +14,7 @@ from personalcapital2.exceptions import EmpowerAPIError
 from personalcapital2.models import (
     Account,
     AccountBalance,
+    AccountBalancesResult,
     AccountPerformanceSummary,
     AccountsResult,
     AccountsSummary,
@@ -381,13 +382,14 @@ def test_get_account_balances_happy_path() -> None:
         ),
     )
     client = _make_client()
-    bals = client.get_account_balances(date(2026, 3, 1), date(2026, 3, 31))
+    result = client.get_account_balances(date(2026, 3, 1), date(2026, 3, 31))
 
-    assert len(bals) == 1
-    assert isinstance(bals[0], AccountBalance)
-    assert bals[0].date == date(2026, 3, 15)
-    assert bals[0].user_account_id == 789
-    assert bals[0].balance == Decimal("5432.1")
+    assert isinstance(result, AccountBalancesResult)
+    assert len(result.balances) == 1
+    assert isinstance(result.balances[0], AccountBalance)
+    assert result.balances[0].date == date(2026, 3, 15)
+    assert result.balances[0].user_account_id == 789
+    assert result.balances[0].balance == Decimal("5432.1")
 
 
 @responses.activate
@@ -397,7 +399,8 @@ def test_get_account_balances_empty() -> None:
         json=_success_response({"histories": []}),
     )
     client = _make_client()
-    assert client.get_account_balances(date(2026, 1, 1), date(2026, 1, 31)) == []
+    result = client.get_account_balances(date(2026, 1, 1), date(2026, 1, 31))
+    assert result.balances == ()
 
 
 # --- get_performance ---

@@ -48,12 +48,14 @@ pythonVersion = "3.12"
 reportUnnecessaryTypeIgnoreComment = true
 exclude = ["scripts", ".venv"]
 
+# mcp SDK (mcp>=1.0) has incomplete type stubs — revisit when SDK types improve
 [[tool.pyright.executionEnvironments]]
 root = "src/personalcapital2/mcp_server.py"
 reportUnknownMemberType = false
 reportUnknownArgumentType = false
 reportUnknownVariableType = false
 reportUnknownParameterType = false
+reportArgumentType = false
 reportUntypedFunctionDecorator = false
 reportUnusedFunction = false
 reportMissingTypeArgument = false

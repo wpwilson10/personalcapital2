@@ -43,6 +43,14 @@ Returned by `client.get_net_worth(start, end)`.
 | `entries` | `tuple[NetWorthEntry, ...]` |
 | `summary` | `NetWorthSummary` |
 
+### AccountBalancesResult
+
+Returned by `client.get_account_balances(start, end)`.
+
+| Field | Type |
+|---|---|
+| `balances` | `tuple[AccountBalance, ...]` |
+
 ### PerformanceResult
 
 Returned by `client.get_performance(start, end, account_ids)`.
@@ -170,7 +178,7 @@ Returned by `client.get_spending(start, end, interval)`.
 
 ### AccountBalance
 
-Returned directly by `client.get_account_balances(start, end)` (not wrapped in a container).
+Returned via `AccountBalancesResult.balances` from `client.get_account_balances(start, end)`.
 
 | Field | Type |
 |---|---|
