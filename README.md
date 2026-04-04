@@ -67,7 +67,7 @@ See [CLI Reference](docs/cli.md) for all commands, date shortcuts, exit codes, a
 | `get_account_balances(start, end)` | `AccountBalancesResult` | Daily account balances |
 | `get_performance(start, end, account_ids)` | `PerformanceResult` | Investment + benchmark performance |
 | `get_quotes(start, end)` | `QuotesResult` | Portfolio vs benchmark + market quotes |
-| `get_spending(start, end, interval)` | `SpendingResult` | Spending by interval (MONTH/WEEK/YEAR) |
+| `get_spending(start, end, interval)` | `SpendingResult` | Current spending (all intervals, see quirks) |
 
 All dates are `datetime.date`, financial values are `decimal.Decimal`, models are frozen dataclasses. See [Python API docs](docs/api.md) for response containers and examples, [Model Reference](docs/models.md) for every field and type.
 
@@ -112,6 +112,8 @@ This library uses Empower's unofficial internal web API, which is not affiliated
 
 - **`is_spending` is unreliable on refunds.** Use `transaction_type` (e.g. `"Refund"`) instead.
 - **`performance` and `benchmarks` share one API call.** `get_performance()` returns both in a single `PerformanceResult`.
+- **`get_accounts` may not list all accounts with holdings.** Some accounts (employer 401k plans, crypto exchanges) can appear in `get_holdings`, `get_account_balances`, and `get_performance` but not in `get_accounts`. Use `get_holdings` to discover investment account IDs.
+- **`get_spending` ignores date range and interval.** The API always returns current-period spending for all three interval types (MONTH, WEEK, YEAR), regardless of the `start_date`, `end_date`, or `interval` parameters.
 - **Sessions expire.** Typically 1-2 days. Run `pc2 login` again on auth errors.
 
 ## Development

@@ -13,7 +13,7 @@ Each method makes a single HTTP request and returns a response container with ty
 | `get_account_balances(start, end)` | `AccountBalancesResult` | Daily account balances |
 | `get_performance(start, end, account_ids)` | `PerformanceResult` | Investment + benchmark performance + per-account summaries |
 | `get_quotes(start, end)` | `QuotesResult` | Portfolio vs benchmark + snapshot + market quotes |
-| `get_spending(start, end, interval)` | `SpendingResult` | Spending by interval (MONTH/WEEK/YEAR) |
+| `get_spending(start, end, interval)` | `SpendingResult` | Current spending (all intervals, see note below) |
 
 Date parameters are `datetime.date`. Financial values are `decimal.Decimal`. All models are frozen dataclasses — see [Model Reference](models.md) for every field and type.
 
@@ -65,8 +65,9 @@ for nw in result.entries:
 print(f"Total change: ${result.summary.date_range_change:.2f}")
 
 # Investment performance (requires explicit account IDs — no hidden API calls)
-accounts = client.get_accounts().accounts
-inv_ids = [a.user_account_id for a in accounts if a.product_type == "INVESTMENT"]
+# Use get_holdings for account IDs — get_accounts may not list all investment accounts
+holdings = client.get_holdings().holdings
+inv_ids = list({h.user_account_id for h in holdings if h.value > 0})
 result = client.get_performance(date(2025, 1, 1), date(2026, 3, 31), inv_ids)
 for s in result.account_summaries:
     print(f"{s.account_name}: ${s.current_balance:.0f} ({s.date_range_balance_percentage_change:.1f}%)")

@@ -286,7 +286,9 @@ class EmpowerClient:
         Args:
             start: Start date for the performance window.
             end: End date for the performance window.
-            account_ids: List of investment account userAccountIds.
+            account_ids: List of investment account userAccountIds. Use
+                get_holdings() to discover these — get_accounts() may not
+                list all accounts that have holdings.
         """
         response = self.fetch(
             "/account/getPerformanceHistories",
@@ -337,12 +339,17 @@ class EmpowerClient:
     _VALID_SPENDING_INTERVALS = frozenset({"MONTH", "WEEK", "YEAR"})
 
     def get_spending(self, start: date, end: date, interval: str = "MONTH") -> SpendingResult:
-        """Fetch spending summary for a date range.
+        """Fetch current spending summary.
+
+        Note: the Empower API ignores the date range and interval parameters,
+        always returning current-period spending for all three interval types
+        (MONTH, WEEK, YEAR).
 
         Args:
-            start: Start date.
-            end: End date.
-            interval: Interval type — MONTH, WEEK, or YEAR.
+            start: Start date (sent to API but not observed to filter results).
+            end: End date (sent to API but not observed to filter results).
+            interval: Interval type — MONTH, WEEK, or YEAR (sent to API but
+                all three intervals are always returned).
 
         Raises:
             ValueError: If interval is not MONTH, WEEK, or YEAR.

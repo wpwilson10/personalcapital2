@@ -224,12 +224,13 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Returns daily investment performance per account, daily benchmark (S&P 500)
         performance, and per-account summaries with balance, fees, income, and returns.
-        Use get_accounts first to discover valid account IDs.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
-            account_ids: List of investment account IDs (integers). Get these from get_accounts.
+            account_ids: List of investment account IDs (integers). Use get_holdings to
+                find user_account_id values for investment accounts — get_accounts may
+                not include all accounts that have holdings (e.g. employer 401k plans).
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`)
         or if start_date is after end_date.
@@ -269,15 +270,19 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         end_date: date,
         interval: Literal["MONTH", "WEEK", "YEAR"] = "MONTH",
     ) -> str:
-        """Fetch spending summary grouped by time interval.
+        """Fetch current spending summary.
 
-        Returns spending data broken down by interval, with average, current,
-        and target amounts plus daily details within each interval.
+        Returns spending data for all three interval types (MONTH, WEEK, YEAR)
+        with average, current, and target amounts plus daily details within each.
+
+        Note: the Empower API always returns current-period spending for all three
+        interval types, regardless of the date range or interval parameter.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
-            interval: Grouping interval — MONTH, WEEK, or YEAR. Defaults to MONTH.
+            interval: Sent to API but has no observable effect — all three intervals
+                are always returned. Defaults to MONTH.
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`)
         or if start_date is after end_date.
