@@ -74,4 +74,5 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
         log.error("Login failed: %s", e)
         raise SystemExit(1) from e
 
+    client.save_session(session_path)
     return client

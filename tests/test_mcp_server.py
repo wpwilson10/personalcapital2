@@ -984,3 +984,159 @@ async def test_account_balances_no_truncation(server: Any, mock_client: MagicMoc
     data = json.loads(text)
     assert len(data["balances"]) == 50
     assert "truncated" not in data
+
+
+# --- Holdings limit tests ---
+
+
+def _make_many_holdings(n: int) -> HoldingsResult:
+    """Create a HoldingsResult with n holdings."""
+    holdings = tuple(
+        Holding(
+            snapshot_date=date(2026, 4, 1),
+            user_account_id=i % 5,
+            ticker=f"TICK{i}",
+            cusip=None,
+            description=f"Security {i}",
+            quantity=Decimal("100"),
+            price=Decimal("50.00"),
+            value=Decimal("5000"),
+            holding_type=None,
+            security_type="ETF",
+            holding_percentage=Decimal("1"),
+            source="EMPOWER",
+            cost_basis=Decimal("4000"),
+            one_day_percent_change=Decimal("0.1"),
+            one_day_value_change=Decimal("5"),
+            fees_per_year=Decimal("1.50"),
+            fund_fees=None,
+        )
+        for i in range(n)
+    )
+    return HoldingsResult(holdings=holdings, total_value=Decimal(str(n * 5000)))
+
+
+async def test_holdings_default_limit(server: Any, mock_client: MagicMock) -> None:
+    """Default limit=100 should truncate when there are more than 100 holdings."""
+    mock_client.get_holdings.return_value = _make_many_holdings(150)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(server, "get_holdings", mock_client=mock_client)
+    data = json.loads(text)
+    assert len(data["holdings"]) == 100
+    assert data["truncated"]["holdings"]["showing"] == 100
+    assert data["truncated"]["holdings"]["total"] == 150
+    assert data["total_value"] == 750000  # Total always present
+
+
+async def test_holdings_custom_limit(server: Any, mock_client: MagicMock) -> None:
+    """Custom limit should be respected."""
+    mock_client.get_holdings.return_value = _make_many_holdings(50)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(server, "get_holdings", {"limit": 10}, mock_client=mock_client)
+    data = json.loads(text)
+    assert len(data["holdings"]) == 10
+    assert data["truncated"]["holdings"]["showing"] == 10
+    assert data["truncated"]["holdings"]["total"] == 50
+
+
+async def test_holdings_no_truncation(server: Any, mock_client: MagicMock) -> None:
+    """No truncated field when under limit."""
+    text = await _call_tool(server, "get_holdings", mock_client=mock_client)
+    data = json.loads(text)
+    assert len(data["holdings"]) == 1
+    assert "truncated" not in data
+
+
+# --- Performance limit tests ---
+
+
+def _make_many_performance(n_inv: int, n_bench: int) -> PerformanceResult:
+    """Create a PerformanceResult with n_inv investment rows and n_bench benchmark rows."""
+    investments = tuple(
+        InvestmentPerformance(
+            date=date(2026, 4, 1),
+            user_account_id=i % 3,
+            performance=Decimal("0.05"),
+        )
+        for i in range(n_inv)
+    )
+    benchmarks = tuple(
+        BenchmarkPerformance(
+            date=date(2026, 4, 1),
+            benchmark=f"^BENCH{i % 6}",
+            performance=Decimal("0.04"),
+        )
+        for i in range(n_bench)
+    )
+    return PerformanceResult(
+        investments=investments,
+        benchmarks=benchmarks,
+        account_summaries=_mock_performance_result().account_summaries,
+    )
+
+
+async def test_performance_default_limit(server: Any, mock_client: MagicMock) -> None:
+    """Default limit=500 should truncate when there are more entries."""
+    mock_client.get_performance.return_value = _make_many_performance(600, 700)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(
+            server,
+            "get_performance",
+            {
+                "start_date": "2026-03-01",
+                "end_date": "2026-04-01",
+                "account_ids": [2],
+            },
+            mock_client=mock_client,
+        )
+    data = json.loads(text)
+    assert len(data["investments"]) == 500
+    assert data["truncated"]["investments"]["showing"] == 500
+    assert data["truncated"]["investments"]["total"] == 600
+    assert len(data["benchmarks"]) == 500
+    assert data["truncated"]["benchmarks"]["showing"] == 500
+    assert data["truncated"]["benchmarks"]["total"] == 700
+    # Account summaries always present in full
+    assert len(data["account_summaries"]) == 1
+
+
+async def test_performance_custom_limit(server: Any, mock_client: MagicMock) -> None:
+    """Custom limit should be respected for both investments and benchmarks."""
+    mock_client.get_performance.return_value = _make_many_performance(100, 200)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(
+            server,
+            "get_performance",
+            {
+                "start_date": "2026-03-01",
+                "end_date": "2026-04-01",
+                "account_ids": [2],
+                "limit": 50,
+            },
+            mock_client=mock_client,
+        )
+    data = json.loads(text)
+    assert len(data["investments"]) == 50
+    assert data["truncated"]["investments"]["showing"] == 50
+    assert data["truncated"]["investments"]["total"] == 100
+    assert len(data["benchmarks"]) == 50
+    assert data["truncated"]["benchmarks"]["showing"] == 50
+    assert data["truncated"]["benchmarks"]["total"] == 200
+
+
+async def test_performance_no_truncation(server: Any, mock_client: MagicMock) -> None:
+    """No truncated field when under limit."""
+    text = await _call_tool(
+        server,
+        "get_performance",
+        {
+            "start_date": "2026-03-01",
+            "end_date": "2026-04-01",
+            "account_ids": [2],
+        },
+        mock_client=mock_client,
+    )
+    data = json.loads(text)
+    assert len(data["investments"]) == 1
+    assert len(data["benchmarks"]) == 1
+    assert "truncated" not in data

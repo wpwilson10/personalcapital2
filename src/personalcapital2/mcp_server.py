@@ -286,18 +286,24 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_holdings(ctx: Context) -> str:
+    def get_holdings(ctx: Context, limit: int = 100) -> str:
         """Fetch current investment holdings across all accounts.
 
         Returns individual holdings with security info, quantities, prices,
         cost basis, and fees, plus the total portfolio value.
-        No parameters required.
+
+        Args:
+            limit: Maximum number of holdings to return (default 100).
+                Use a smaller value for quick lookups or a larger value when
+                you need more detail. Total value is always complete.
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`).
         """
         client = _get_client(ctx)
         result = client.get_holdings()
-        return _enforce_char_cap(serialize_result(result))
+        output = serialize_result(result)
+        output = _apply_limit(output, "holdings", limit)
+        return _enforce_char_cap(output)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -356,7 +362,11 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
     def get_performance(
-        ctx: Context, start_date: date, end_date: date, account_ids: list[int]
+        ctx: Context,
+        start_date: date,
+        end_date: date,
+        account_ids: list[int],
+        limit: int = 500,
     ) -> str:
         """Fetch daily investment performance and benchmark comparisons.
 
@@ -366,12 +376,16 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Returns daily investment performance per account, daily benchmark (S&P 500)
         performance, and per-account summaries with balance, fees, income, and returns.
+        Account summaries are always returned in full regardless of limit.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             account_ids: List of investment account IDs (integers). Use get_holdings to
                 find user_account_id values for investment accounts.
+            limit: Maximum number of entries to return for each of the investments
+                and benchmarks lists (default 500). Account summaries are always
+                complete. Use a smaller value for quick lookups.
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`)
         or if start_date is after end_date.
@@ -380,7 +394,10 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_performance(start_date, end_date, account_ids)
-        return _enforce_char_cap(serialize_result(result))
+        output = serialize_result(result)
+        output = _apply_limit(output, "investments", limit)
+        output = _apply_limit(output, "benchmarks", limit)
+        return _enforce_char_cap(output)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
