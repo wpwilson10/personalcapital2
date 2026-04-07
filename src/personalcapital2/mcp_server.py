@@ -32,9 +32,12 @@ from contextlib import asynccontextmanager
 from datetime import date  # noqa: TC003 — needed at runtime by Pydantic schema generation
 from functools import wraps
 from pathlib import Path  # noqa: TC003 — needed at runtime by lifespan
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import requests
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 from mcp.server.fastmcp import Context, FastMCP
 
 from personalcapital2._serialization import serialize_result
@@ -92,15 +95,18 @@ def _apply_limit(serialized: str, field: str, limit: int) -> str:
         return serialized
     total = len(items)
     data[field] = items[:limit]
-    data["truncated"] = {"field": field, "showing": limit, "total": total}
+    truncated: dict[str, Any] = data.get("truncated") or {}
+    truncated[field] = {"showing": limit, "total": total}
+    data["truncated"] = truncated
     return json.dumps(data, indent=2)
 
 
 def _enforce_char_cap(serialized: str) -> str:
-    """Truncate the largest list field if output exceeds the character cap.
+    """Truncate list fields if output exceeds the character cap.
 
-    Uses binary search to find the maximum number of items that fit within
-    the cap. Adds a ``truncated`` metadata field when truncation occurs.
+    Iteratively finds the largest list field and uses binary search to fit
+    it within the cap. Repeats for additional list fields if still over.
+    Adds a ``truncated`` metadata field when truncation occurs.
 
     The cap is configurable via the ``PC2_MCP_MAX_CHARS`` environment variable
     (default: 50,000 characters, roughly 12,500 tokens).
@@ -111,53 +117,69 @@ def _enforce_char_cap(serialized: str) -> str:
 
     data: dict[str, Any] = json.loads(serialized)
 
-    # Find the largest list field
-    largest_key: str | None = None
-    largest_len = 0
-    for key, value in data.items():
-        if isinstance(value, list) and len(value) > largest_len:
-            largest_key = key
-            largest_len = len(value)
-
-    if largest_key is None or largest_len == 0:
-        return serialized  # No list field to truncate
-
-    items: list[Any] = data[largest_key]
-
-    # Preserve the original total from a prior _apply_limit truncation
+    # Seed truncation metadata from any prior _apply_limit call
+    truncated_info: dict[str, Any] = {}
     prior = data.get("truncated")
-    if isinstance(prior, dict) and prior.get("field") == largest_key:
-        total: int = prior["total"]
-    else:
-        total = len(items)
+    if isinstance(prior, dict):
+        truncated_info = {k: v for k, v in prior.items() if k != "hint"}
 
-    # Binary search for the maximum number of items that fit
-    lo, hi = 0, len(items)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        data[largest_key] = items[:mid]
+    # Track which fields have already been fully truncated
+    exhausted: set[str] = set()
+
+    while True:
+        # Find the largest non-exhausted list field
+        largest_key: str | None = None
+        largest_len = 0
+        for key, value in data.items():
+            if key == "truncated":
+                continue
+            if isinstance(value, list) and len(value) > largest_len and key not in exhausted:
+                largest_key = key
+                largest_len = len(value)
+
+        if largest_key is None or largest_len == 0:
+            return serialized if not truncated_info else json.dumps(data, indent=2)
+
+        items: list[Any] = data[largest_key]
+
+        # Preserve the original total from a prior _apply_limit truncation
+        prior_info = truncated_info.get(largest_key)
+        if isinstance(prior_info, dict) and "total" in prior_info:
+            total: int = prior_info["total"]
+        else:
+            total = len(items)
+
+        # Binary search for the maximum number of items that fit
+        lo, hi = 0, len(items)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            data[largest_key] = items[:mid]
+            truncated_info[largest_key] = {"showing": mid, "total": total}
+            data["truncated"] = {
+                **truncated_info,
+                "hint": "Narrow the date range or request fewer accounts.",
+            }
+            if len(json.dumps(data, indent=2)) <= max_chars:
+                lo = mid
+            else:
+                hi = mid - 1
+
+        data[largest_key] = items[:lo]
+        truncated_info[largest_key] = {"showing": lo, "total": total}
         data["truncated"] = {
-            "field": largest_key,
-            "showing": mid,
-            "total": total,
+            **truncated_info,
             "hint": "Narrow the date range or request fewer accounts.",
         }
-        if len(json.dumps(data, indent=2)) <= max_chars:
-            lo = mid
-        else:
-            hi = mid - 1
 
-    data[largest_key] = items[:lo]
-    data["truncated"] = {
-        "field": largest_key,
-        "showing": lo,
-        "total": total,
-        "hint": "Narrow the date range or request fewer accounts.",
-    }
+        if len(json.dumps(data, indent=2)) <= max_chars:
+            break
+
+        exhausted.add(largest_key)
+
     return json.dumps(data, indent=2)
 
 
-def _handle_tool_errors(fn: object) -> object:
+def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
     """Decorator that catches client exceptions and returns agent-friendly error strings.
 
     Wraps tool functions so the LLM agent gets a readable error message
@@ -165,9 +187,9 @@ def _handle_tool_errors(fn: object) -> object:
     """
 
     @wraps(fn)
-    def wrapper(*args: object, **kwargs: object) -> str:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> str:
         try:
-            return fn(*args, **kwargs)  # pyright: ignore[reportCallIssue] — fn is callable returning str
+            return fn(*args, **kwargs)
         except EmpowerAuthError as exc:
             log.warning("Auth error in tool call: %s", exc)
             return (
@@ -274,15 +296,19 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_net_worth(ctx: Context, start_date: date, end_date: date) -> str:
+    def get_net_worth(ctx: Context, start_date: date, end_date: date, limit: int = 180) -> str:
         """Fetch daily net worth history with change summary.
 
         Returns daily net worth entries broken down by asset/liability category,
         plus a summary with percentage and value changes over the period.
+        The summary is always returned in full regardless of limit.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
+            limit: Maximum number of daily entries to return (default 180).
+                Use a smaller value for quick lookups or a larger value when
+                you need more detail. Summary is always complete.
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`)
         or if start_date is after end_date.
@@ -291,11 +317,15 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_net_worth(start_date, end_date)
-        return _enforce_char_cap(serialize_result(result))
+        output = serialize_result(result)
+        output = _apply_limit(output, "entries", limit)
+        return _enforce_char_cap(output)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_account_balances(ctx: Context, start_date: date, end_date: date) -> str:
+    def get_account_balances(
+        ctx: Context, start_date: date, end_date: date, limit: int = 500
+    ) -> str:
         """Fetch daily account balance history for all accounts.
 
         Returns daily balances for each account, with account ID and balance amount.
@@ -303,6 +333,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
+            limit: Maximum number of balance entries to return (default 500).
+                Use a smaller value for quick lookups or a larger value when
+                you need more detail.
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`)
         or if start_date is after end_date.
@@ -311,7 +344,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             return err
         client = _get_client(ctx)
         result = client.get_account_balances(start_date, end_date)
-        return _enforce_char_cap(serialize_result(result))
+        output = serialize_result(result)
+        output = _apply_limit(output, "balances", limit)
+        return _enforce_char_cap(output)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors

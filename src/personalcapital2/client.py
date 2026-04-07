@@ -92,6 +92,27 @@ DEFAULT_SESSION_PATH = (
     Path(_env_session).expanduser() if _env_session else DEFAULT_SESSION_DIR / "session.json"
 )
 
+_AUTH_ERROR_PATTERNS: tuple[str, ...] = (
+    "session not authenticated",
+    "session expired",
+    "session no longer valid",
+)
+
+_AUTH_FAILURE_LEVELS: frozenset[str] = frozenset({"NONE", "MFA_REQUIRED"})
+
+
+def _is_auth_error(sp_header: dict[str, Any], error_message: str) -> bool:
+    """Detect whether an API error indicates an authentication failure.
+
+    Checks the structured ``authLevel`` field first (most reliable), then
+    falls back to matching known error message patterns.
+    """
+    auth_level = sp_header.get("authLevel")
+    if isinstance(auth_level, str) and auth_level in _AUTH_FAILURE_LEVELS:
+        return True
+    return error_message.lower() in _AUTH_ERROR_PATTERNS
+
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -395,6 +416,8 @@ class EmpowerClient:
         if sp_header.get("success") is False:
             errors = sp_header.get("errors", [])
             msg = errors[0].get("message", "Unknown API error") if errors else "Unknown API error"
+            if _is_auth_error(sp_header, msg):
+                raise EmpowerAuthError(f"{endpoint}: {msg}")
             raise EmpowerAPIError(f"{endpoint}: {msg}")
 
         # Update CSRF if rotated

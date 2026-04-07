@@ -139,15 +139,54 @@ def test_fetch_raises_on_api_failure() -> None:
     client._csrf = "my-csrf"
     api_resp = _mock_response(
         json_data={
-            "spHeader": {"success": False, "errors": [{"message": "Session expired"}]},
+            "spHeader": {"success": False, "errors": [{"message": "Rate limited"}]},
         }
     )
 
     with (
         patch.object(client._session, "post", return_value=api_resp),
-        pytest.raises(EmpowerAPIError, match="Session expired"),
+        pytest.raises(EmpowerAPIError, match="Rate limited"),
     ):
         client.fetch("/newaccount/getAccounts2")
+
+
+def test_fetch_raises_auth_error_for_expired_session() -> None:
+    """Auth-related API errors should raise EmpowerAuthError, not EmpowerAPIError."""
+    client = EmpowerClient()
+    client._csrf = "my-csrf"
+
+    for message in ("Session expired", "Session not authenticated", "Session no longer valid"):
+        api_resp = _mock_response(
+            json_data={
+                "spHeader": {"success": False, "errors": [{"message": message}]},
+            }
+        )
+        with (
+            patch.object(client._session, "post", return_value=api_resp),
+            pytest.raises(EmpowerAuthError, match=message),
+        ):
+            client.fetch("/test/endpoint")
+
+
+def test_fetch_raises_auth_error_for_none_auth_level() -> None:
+    """authLevel=NONE should raise EmpowerAuthError regardless of message."""
+    client = EmpowerClient()
+    client._csrf = "my-csrf"
+    api_resp = _mock_response(
+        json_data={
+            "spHeader": {
+                "success": False,
+                "authLevel": "NONE",
+                "errors": [{"message": "Something unexpected"}],
+            },
+        }
+    )
+
+    with (
+        patch.object(client._session, "post", return_value=api_resp),
+        pytest.raises(EmpowerAuthError, match="Something unexpected"),
+    ):
+        client.fetch("/test/endpoint")
 
 
 def test_fetch_raises_on_non_json_response() -> None:
@@ -248,3 +287,33 @@ def test_default_user_agent() -> None:
 def test_custom_user_agent() -> None:
     client = EmpowerClient(user_agent="CustomBot/1.0")
     assert client._session.headers["User-Agent"] == "CustomBot/1.0"
+
+
+# --- Auth error detection ---
+
+
+def test_is_auth_error_known_messages() -> None:
+    """Known auth error messages should be detected regardless of case."""
+    from personalcapital2.client import _is_auth_error
+
+    header: dict[str, object] = {"success": False}
+    assert _is_auth_error(header, "Session expired") is True
+    assert _is_auth_error(header, "Session not authenticated") is True
+    assert _is_auth_error(header, "Session no longer valid") is True
+    assert _is_auth_error(header, "session expired") is True  # case insensitive
+
+
+def test_is_auth_error_auth_level() -> None:
+    """authLevel=NONE or MFA_REQUIRED should be detected as auth errors."""
+    from personalcapital2.client import _is_auth_error
+
+    assert _is_auth_error({"authLevel": "NONE"}, "Unknown error") is True
+    assert _is_auth_error({"authLevel": "MFA_REQUIRED"}, "Unknown error") is True
+
+
+def test_is_auth_error_non_auth() -> None:
+    """Non-auth errors should not be detected as auth errors."""
+    from personalcapital2.client import _is_auth_error
+
+    assert _is_auth_error({"success": False}, "Rate limited") is False
+    assert _is_auth_error({"authLevel": "SESSION_AUTHENTICATED"}, "Some error") is False

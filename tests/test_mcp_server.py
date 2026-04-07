@@ -663,9 +663,8 @@ async def test_transactions_default_limit(server: Any, mock_client: MagicMock) -
         )
     data = json.loads(text)
     assert len(data["transactions"]) == 100
-    assert data["truncated"]["field"] == "transactions"
-    assert data["truncated"]["showing"] == 100
-    assert data["truncated"]["total"] == 150
+    assert data["truncated"]["transactions"]["showing"] == 100
+    assert data["truncated"]["transactions"]["total"] == 150
     # Summary and categories always present
     assert "summary" in data
     assert "categories" in data
@@ -683,8 +682,8 @@ async def test_transactions_custom_limit(server: Any, mock_client: MagicMock) ->
         )
     data = json.loads(text)
     assert len(data["transactions"]) == 10
-    assert data["truncated"]["showing"] == 10
-    assert data["truncated"]["total"] == 50
+    assert data["truncated"]["transactions"]["showing"] == 10
+    assert data["truncated"]["transactions"]["total"] == 50
 
 
 async def test_transactions_no_truncation_when_under_limit(
@@ -734,9 +733,8 @@ def test_apply_limit_over_limit() -> None:
     result = _apply_limit(data, "items", 5)
     parsed = json.loads(result)
     assert len(parsed["items"]) == 5
-    assert parsed["truncated"]["field"] == "items"
-    assert parsed["truncated"]["showing"] == 5
-    assert parsed["truncated"]["total"] == 20
+    assert parsed["truncated"]["items"]["showing"] == 5
+    assert parsed["truncated"]["items"]["total"] == 20
     assert parsed["summary"] == "ok"  # Other fields untouched
 
 
@@ -760,9 +758,8 @@ def test_enforce_char_cap_over_limit() -> None:
 
     assert len(result) <= 500
     parsed = json.loads(result)
-    assert parsed["truncated"]["field"] == "entries"
-    assert parsed["truncated"]["total"] == 100
-    assert parsed["truncated"]["showing"] < 100
+    assert parsed["truncated"]["entries"]["total"] == 100
+    assert parsed["truncated"]["entries"]["showing"] < 100
     assert "hint" in parsed["truncated"]
     assert parsed["summary"] == {"total": 100}  # Summary untouched
 
@@ -792,7 +789,7 @@ def test_enforce_char_cap_preserves_prior_total() -> None:
         {
             "entries": items,
             "summary": "ok",
-            "truncated": {"field": "entries", "showing": 100, "total": 500},
+            "truncated": {"entries": {"showing": 100, "total": 500}},
         },
         indent=2,
     )
@@ -801,9 +798,8 @@ def test_enforce_char_cap_preserves_prior_total() -> None:
         result = _enforce_char_cap(data)
 
     parsed = json.loads(result)
-    assert parsed["truncated"]["total"] == 500  # Original total preserved, not 100
-    assert parsed["truncated"]["showing"] < 100
-    assert parsed["truncated"]["field"] == "entries"
+    assert parsed["truncated"]["entries"]["total"] == 500  # Original total preserved
+    assert parsed["truncated"]["entries"]["showing"] < 100
 
 
 def test_enforce_char_cap_no_list_fields() -> None:
@@ -814,3 +810,177 @@ def test_enforce_char_cap_no_list_fields() -> None:
         result = _enforce_char_cap(data)
     # Can't truncate — returns original
     assert result == data
+
+
+def test_enforce_char_cap_multi_list() -> None:
+    """_enforce_char_cap should truncate multiple list fields to fit within the cap."""
+    # Simulate PerformanceResult-like data with 3 large list fields
+    list_a = [{"id": i, "data": "a" * 30} for i in range(50)]
+    list_b = [{"id": i, "data": "b" * 30} for i in range(40)]
+    list_c = [{"id": i, "data": "c" * 30} for i in range(30)]
+    data = json.dumps(
+        {"investments": list_a, "benchmarks": list_b, "summaries": list_c},
+        indent=2,
+    )
+    # Cap is small enough that truncating only the largest list isn't sufficient
+    cap = len(data) // 4
+    assert cap < len(data)
+
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": str(cap)}):
+        result = _enforce_char_cap(data)
+
+    assert len(result) <= cap
+    parsed = json.loads(result)
+    assert "truncated" in parsed
+    # At least two fields should have been truncated
+    truncated_fields = [k for k in parsed["truncated"] if k != "hint"]
+    assert len(truncated_fields) >= 2
+
+
+# --- Net worth limit tests ---
+
+
+def _make_many_net_worth_entries(n: int) -> NetWorthResult:
+    """Create a NetWorthResult with n entries."""
+    entries = tuple(
+        NetWorthEntry(
+            date=date(2026, 1, 1),
+            networth=Decimal("50000"),
+            total_assets=Decimal("60000"),
+            total_liabilities=Decimal("10000"),
+            total_cash=Decimal("5000"),
+            total_investment=Decimal("45000"),
+            total_credit=Decimal("0"),
+            total_mortgage=Decimal("0"),
+            total_loan=Decimal("10000"),
+            total_other_assets=Decimal("0"),
+            total_other_liabilities=Decimal("0"),
+        )
+        for _ in range(n)
+    )
+    return NetWorthResult(
+        entries=entries,
+        summary=NetWorthSummary(
+            date_range_change=Decimal("1000"),
+            date_range_percentage_change=Decimal("2.04"),
+            cash_change=Decimal("100"),
+            cash_percentage_change=Decimal("2.04"),
+            investment_change=Decimal("900"),
+            investment_percentage_change=Decimal("2.04"),
+            credit_change=Decimal("0"),
+            credit_percentage_change=Decimal("0"),
+            mortgage_change=Decimal("0"),
+            mortgage_percentage_change=Decimal("0"),
+            loan_change=Decimal("200"),
+            loan_percentage_change=Decimal("2.04"),
+            other_assets_change=Decimal("0"),
+            other_assets_percentage_change=Decimal("0"),
+            other_liabilities_change=Decimal("0"),
+            other_liabilities_percentage_change=Decimal("0"),
+        ),
+    )
+
+
+async def test_net_worth_default_limit(server: Any, mock_client: MagicMock) -> None:
+    """Default limit=180 should truncate when there are more entries."""
+    mock_client.get_net_worth.return_value = _make_many_net_worth_entries(250)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(
+            server,
+            "get_net_worth",
+            {"start_date": "2026-01-01", "end_date": "2026-12-31"},
+            mock_client=mock_client,
+        )
+    data = json.loads(text)
+    assert len(data["entries"]) == 180
+    assert data["truncated"]["entries"]["showing"] == 180
+    assert data["truncated"]["entries"]["total"] == 250
+    assert "summary" in data
+
+
+async def test_net_worth_custom_limit(server: Any, mock_client: MagicMock) -> None:
+    """Custom limit should be respected."""
+    mock_client.get_net_worth.return_value = _make_many_net_worth_entries(100)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(
+            server,
+            "get_net_worth",
+            {"start_date": "2026-01-01", "end_date": "2026-12-31", "limit": 30},
+            mock_client=mock_client,
+        )
+    data = json.loads(text)
+    assert len(data["entries"]) == 30
+    assert data["truncated"]["entries"]["showing"] == 30
+    assert data["truncated"]["entries"]["total"] == 100
+
+
+async def test_net_worth_no_truncation(server: Any, mock_client: MagicMock) -> None:
+    """No truncated field when under limit."""
+    mock_client.get_net_worth.return_value = _make_many_net_worth_entries(50)
+    text = await _call_tool(
+        server,
+        "get_net_worth",
+        {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+        mock_client=mock_client,
+    )
+    data = json.loads(text)
+    assert len(data["entries"]) == 50
+    assert "truncated" not in data
+
+
+# --- Account balances limit tests ---
+
+
+def _make_many_balances(n: int) -> AccountBalancesResult:
+    """Create an AccountBalancesResult with n balance entries."""
+    balances = tuple(
+        AccountBalance(date=date(2026, 4, 1), user_account_id=1, balance=Decimal("5000.50"))
+        for _ in range(n)
+    )
+    return AccountBalancesResult(balances=balances)
+
+
+async def test_account_balances_default_limit(server: Any, mock_client: MagicMock) -> None:
+    """Default limit=500 should truncate when there are more entries."""
+    mock_client.get_account_balances.return_value = _make_many_balances(600)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(
+            server,
+            "get_account_balances",
+            {"start_date": "2026-01-01", "end_date": "2026-12-31"},
+            mock_client=mock_client,
+        )
+    data = json.loads(text)
+    assert len(data["balances"]) == 500
+    assert data["truncated"]["balances"]["showing"] == 500
+    assert data["truncated"]["balances"]["total"] == 600
+
+
+async def test_account_balances_custom_limit(server: Any, mock_client: MagicMock) -> None:
+    """Custom limit should be respected."""
+    mock_client.get_account_balances.return_value = _make_many_balances(100)
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        text = await _call_tool(
+            server,
+            "get_account_balances",
+            {"start_date": "2026-01-01", "end_date": "2026-12-31", "limit": 10},
+            mock_client=mock_client,
+        )
+    data = json.loads(text)
+    assert len(data["balances"]) == 10
+    assert data["truncated"]["balances"]["showing"] == 10
+    assert data["truncated"]["balances"]["total"] == 100
+
+
+async def test_account_balances_no_truncation(server: Any, mock_client: MagicMock) -> None:
+    """No truncated field when under limit."""
+    mock_client.get_account_balances.return_value = _make_many_balances(50)
+    text = await _call_tool(
+        server,
+        "get_account_balances",
+        {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+        mock_client=mock_client,
+    )
+    data = json.loads(text)
+    assert len(data["balances"]) == 50
+    assert "truncated" not in data

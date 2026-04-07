@@ -125,10 +125,10 @@ def test_get_accounts_empty() -> None:
 def test_get_accounts_api_error() -> None:
     responses.post(
         _api_url("/newaccount/getAccounts2"),
-        json=_error_response("Session expired"),
+        json=_error_response("Rate limited"),
     )
     client = _make_client()
-    with pytest.raises(EmpowerAPIError, match="Session expired"):
+    with pytest.raises(EmpowerAPIError, match="Rate limited"):
         client.get_accounts()
 
 
