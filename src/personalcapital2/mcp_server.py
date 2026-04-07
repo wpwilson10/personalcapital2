@@ -123,10 +123,16 @@ def _enforce_char_cap(serialized: str) -> str:
         return serialized  # No list field to truncate
 
     items: list[Any] = data[largest_key]
-    total = len(items)
+
+    # Preserve the original total from a prior _apply_limit truncation
+    prior = data.get("truncated")
+    if isinstance(prior, dict) and prior.get("field") == largest_key:
+        total: int = prior["total"]
+    else:
+        total = len(items)
 
     # Binary search for the maximum number of items that fit
-    lo, hi = 0, total
+    lo, hi = 0, len(items)
     while lo < hi:
         mid = (lo + hi + 1) // 2
         data[largest_key] = items[:mid]

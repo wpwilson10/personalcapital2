@@ -784,6 +784,28 @@ def test_enforce_char_cap_env_var_override() -> None:
     assert json.loads(result) == {"items": big_list}
 
 
+def test_enforce_char_cap_preserves_prior_total() -> None:
+    """When _apply_limit truncates first, _enforce_char_cap must keep the original total."""
+    # Simulate _apply_limit already truncated 500 -> 100, setting truncated metadata
+    items = [{"value": f"item-{i:04d}", "data": "x" * 50} for i in range(100)]
+    data = json.dumps(
+        {
+            "entries": items,
+            "summary": "ok",
+            "truncated": {"field": "entries", "showing": 100, "total": 500},
+        },
+        indent=2,
+    )
+
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "2000"}):
+        result = _enforce_char_cap(data)
+
+    parsed = json.loads(result)
+    assert parsed["truncated"]["total"] == 500  # Original total preserved, not 100
+    assert parsed["truncated"]["showing"] < 100
+    assert parsed["truncated"]["field"] == "entries"
+
+
 def test_enforce_char_cap_no_list_fields() -> None:
     """_enforce_char_cap should not crash when there are no list fields to truncate."""
     # Create a large string-only payload
