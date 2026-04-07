@@ -301,6 +301,9 @@ def test_is_auth_error_known_messages() -> None:
     assert _is_auth_error(header, "Session not authenticated") is True
     assert _is_auth_error(header, "Session no longer valid") is True
     assert _is_auth_error(header, "session expired") is True  # case insensitive
+    # API appends trailing punctuation inconsistently
+    assert _is_auth_error(header, "Session not authenticated.") is True
+    assert _is_auth_error(header, "Session expired.") is True
 
 
 def test_is_auth_error_auth_level() -> None:

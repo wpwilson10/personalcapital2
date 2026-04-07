@@ -105,12 +105,15 @@ def _is_auth_error(sp_header: dict[str, Any], error_message: str) -> bool:
     """Detect whether an API error indicates an authentication failure.
 
     Checks the structured ``authLevel`` field first (most reliable), then
-    falls back to matching known error message patterns.
+    falls back to substring matching against known error message patterns.
+    Uses substring matching because the API appends trailing punctuation
+    inconsistently (e.g. "Session not authenticated." vs "Session not authenticated").
     """
     auth_level = sp_header.get("authLevel")
     if isinstance(auth_level, str) and auth_level in _AUTH_FAILURE_LEVELS:
         return True
-    return error_message.lower() in _AUTH_ERROR_PATTERNS
+    msg = error_message.lower()
+    return any(pattern in msg for pattern in _AUTH_ERROR_PATTERNS)
 
 
 DEFAULT_USER_AGENT = (
