@@ -171,7 +171,7 @@ class EmpowerClient:
         self._csrf = ""
         self._session_path = session_path
         if session_path is not None:
-            self._load_session()
+            self.load_session()
 
     # --- Authentication ---
 
@@ -183,7 +183,7 @@ class EmpowerClient:
             EmpowerAuthError: if login fails for any other reason.
         """
         if self._session_path:
-            self._load_session()
+            self.load_session()
 
         csrf = self._extract_csrf()
         if csrf is None:
@@ -462,8 +462,15 @@ class EmpowerClient:
             raise
         log.info("Session saved to %s", target)
 
-    def _load_session(self) -> None:
-        """Load session from disk if available. Checks file permissions."""
+    def load_session(self) -> None:
+        """Reload session (CSRF token + cookies) from disk.
+
+        No-op if no session path is configured or the file doesn't exist.
+        Rejects files with insecure permissions (group/world-readable).
+
+        Useful for long-running processes (e.g. MCP servers) that need to
+        pick up a fresh session after the user re-authenticates.
+        """
         if self._session_path is None or not self._session_path.exists():
             return
 

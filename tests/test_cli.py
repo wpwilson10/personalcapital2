@@ -560,7 +560,7 @@ def test_cmd_accounts_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_accounts.return_value = result
         main(["--session", str(session), "accounts"])
 
@@ -580,7 +580,7 @@ def test_cmd_accounts_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_accounts.return_value = result
         main(["--format", "csv", "--session", str(session), "accounts"])
 
@@ -601,7 +601,7 @@ def test_cmd_transactions_json(tmp_path: Path, capsys: pytest.CaptureFixture[str
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_transactions.return_value = result
         main(
             [
@@ -632,7 +632,7 @@ def test_cmd_categories_json(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_transactions.return_value = result
         main(["--session", str(session), "categories", "--start", "mb", "--end", "today"])
 
@@ -667,7 +667,7 @@ def test_cmd_holdings_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_holdings.return_value = result
         main(["--session", str(session), "holdings"])
 
@@ -696,7 +696,7 @@ def test_cmd_net_worth_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_net_worth.return_value = result
         main(["--session", str(session), "net-worth", "--start", "mb", "--end", "today"])
 
@@ -712,7 +712,7 @@ def test_cmd_balances_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_account_balances.return_value = AccountBalancesResult(balances=(bal,))
         main(["--session", str(session), "balances", "--start", "mb", "--end", "today"])
 
@@ -735,7 +735,7 @@ def test_cmd_performance_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_performance.return_value = result
         main(
             [
@@ -770,7 +770,7 @@ def test_cmd_benchmarks_json(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_performance.return_value = result
         main(
             [
@@ -809,7 +809,7 @@ def test_cmd_portfolio_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_quotes.return_value = result
         main(["--session", str(session), "portfolio", "--start", "mb", "--end", "today"])
 
@@ -840,7 +840,7 @@ def test_cmd_snapshot_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_quotes.return_value = result
         main(["--session", str(session), "snapshot", "--start", "mb", "--end", "today"])
 
@@ -872,7 +872,7 @@ def test_cmd_snapshot_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_quotes.return_value = result
         main(
             [
@@ -907,7 +907,7 @@ def test_cmd_spending_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_spending.return_value = SpendingResult(intervals=(summary,))
         main(
             [
@@ -936,7 +936,7 @@ def test_cmd_raw_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> Non
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.fetch.return_value = raw_response
         main(["--session", str(session), "raw", "/test/endpoint", "--data", "key=value"])
 
@@ -955,7 +955,7 @@ def test_cmd_raw_no_data(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.fetch.return_value = raw_response
         main(["--session", str(session), "raw", "/test/endpoint"])
 
@@ -971,7 +971,7 @@ def test_auth_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_accounts.side_effect = EmpowerAuthError("Session expired")
         with pytest.raises(SystemExit) as exc_info:
             main(["--session", str(session), "accounts"])
@@ -990,7 +990,7 @@ def test_api_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
-        instance._load_session = MagicMock()
+        instance.load_session = MagicMock()
         instance.get_accounts.side_effect = EmpowerAPIError("Server error")
         with pytest.raises(SystemExit) as exc_info:
             main(["--session", str(session), "accounts"])

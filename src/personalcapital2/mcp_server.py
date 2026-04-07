@@ -57,8 +57,13 @@ class _AppContext:
 
 
 def _get_client(ctx: Context) -> EmpowerClient:
-    """Extract the EmpowerClient from the MCP context."""
+    """Extract the EmpowerClient from the MCP context.
+
+    Reloads the session from disk on each call so the long-running server
+    picks up fresh sessions after the user re-authenticates with ``pc2 login``.
+    """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
+    app_ctx.client.load_session()
     return app_ctx.client
 
 
