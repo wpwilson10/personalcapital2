@@ -29,7 +29,7 @@ from collections.abc import (
     AsyncIterator,  # noqa: TC003 — needed at runtime by SDK
 )
 from contextlib import asynccontextmanager
-from datetime import date  # noqa: TC003 — needed at runtime by Pydantic schema generation
+from datetime import date
 from functools import wraps
 from pathlib import Path  # noqa: TC003 — needed at runtime by lifespan
 from typing import TYPE_CHECKING, Any, Literal
@@ -339,14 +339,16 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     ) -> str:
         """Fetch daily account balance history for all accounts.
 
-        Returns daily balances for each account, with account ID and balance amount.
+        Returns daily balances for each account, with account ID and balance
+        amount, plus a summary with account count, latest date, and total
+        balance. The summary is always returned in full regardless of limit.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             limit: Maximum number of balance entries to return (default 500).
                 Use a smaller value for quick lookups or a larger value when
-                you need more detail.
+                you need more detail. Summary is always complete.
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`)
         or if start_date is after end_date.
@@ -424,8 +426,8 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     @_handle_tool_errors
     def get_spending(
         ctx: Context,
-        start_date: date,
-        end_date: date,
+        start_date: date | None = None,
+        end_date: date | None = None,
         interval: Literal["MONTH", "WEEK", "YEAR"] = "MONTH",
     ) -> str:
         """Fetch current spending summary. The API ignores date range and interval
@@ -436,20 +438,20 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         daily details within each interval.
 
         Args:
-            start_date: Start of date range (ISO format: YYYY-MM-DD). Sent to API
-                but has no observable effect on results.
-            end_date: End of date range (ISO format: YYYY-MM-DD). Sent to API
-                but has no observable effect on results.
+            start_date: Optional. Sent to API but has no observable effect on
+                results. Defaults to today.
+            end_date: Optional. Sent to API but has no observable effect on
+                results. Defaults to today.
             interval: Sent to API but has no observable effect — all three intervals
                 are always returned. Defaults to MONTH.
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`)
-        or if start_date is after end_date.
+        Errors: returns an error message if the session is expired (re-run `pc2 login`).
         """
-        if err := _validate_date_range(start_date, end_date):
-            return err
+        today = date.today()
+        effective_start = start_date or today
+        effective_end = end_date or today
         client = _get_client(ctx)
-        result = client.get_spending(start_date, end_date, interval)
+        result = client.get_spending(effective_start, effective_end, interval)
         return _enforce_char_cap(serialize_result(result))
 
     return mcp

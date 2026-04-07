@@ -5,7 +5,7 @@ class EmpowerAuthError(Exception):
     """Raised when login fails (bad credentials, CSRF extraction failure, etc.)."""
 
 
-class TwoFactorRequiredError(Exception):
+class TwoFactorRequiredError(EmpowerAuthError):
     """Raised when the server requires 2FA before password auth can proceed."""
 
     def __init__(self, message: str = "Two-factor authentication required") -> None:

@@ -30,7 +30,9 @@ from urllib3.util.retry import Retry
 
 from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, TwoFactorRequiredError
 from personalcapital2.models import (
+    AccountBalance,
     AccountBalancesResult,
+    AccountBalancesSummary,
     AccountsResult,
     HoldingsResult,
     NetWorthResult,
@@ -121,6 +123,30 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
+
+
+def _compute_balances_summary(
+    balances: tuple[AccountBalance, ...],
+) -> AccountBalancesSummary:
+    """Compute a summary from parsed balance data.
+
+    The API does not provide a pre-computed summary for this endpoint,
+    so we derive one: count of unique accounts, the latest date, and the
+    sum of each account's balance on that date.
+    """
+    if not balances:
+        return AccountBalancesSummary(account_count=0, latest_date=None, latest_total=Decimal(0))
+    account_ids = {b.user_account_id for b in balances}
+    latest_date = max(b.date for b in balances)
+    latest_total = sum(
+        (b.balance for b in balances if b.date == latest_date),
+        Decimal(0),
+    )
+    return AccountBalancesSummary(
+        account_count=len(account_ids),
+        latest_date=latest_date,
+        latest_total=latest_total,
+    )
 
 
 class EmpowerClient:
@@ -300,8 +326,11 @@ class EmpowerClient:
             },
         )
         rows = parse_account_balances(response)
+        balances = tuple(account_balance_from_dict(r) for r in rows)
+        summary = _compute_balances_summary(balances)
         return AccountBalancesResult(
-            balances=tuple(account_balance_from_dict(r) for r in rows),
+            balances=balances,
+            summary=summary,
         )
 
     def get_performance(self, start: date, end: date, account_ids: list[int]) -> PerformanceResult:

@@ -27,6 +27,7 @@ from personalcapital2.models import (  # noqa: E402
     Account,
     AccountBalance,
     AccountBalancesResult,
+    AccountBalancesSummary,
     AccountPerformanceSummary,
     AccountsResult,
     AccountsSummary,
@@ -202,6 +203,11 @@ def _mock_account_balances_result() -> AccountBalancesResult:
     return AccountBalancesResult(
         balances=(
             AccountBalance(date=date(2026, 4, 1), user_account_id=1, balance=Decimal("5000.50")),
+        ),
+        summary=AccountBalancesSummary(
+            account_count=1,
+            latest_date=date(2026, 4, 1),
+            latest_total=Decimal("5000.50"),
         ),
     )
 
@@ -419,8 +425,11 @@ async def test_get_account_balances(server: Any, mock_client: MagicMock) -> None
     )
     data = json.loads(text)
     assert "balances" in data
+    assert "summary" in data
     assert data["balances"][0]["user_account_id"] == 1
     assert data["balances"][0]["balance"] == 5000.5
+    assert data["summary"]["account_count"] == 1
+    assert data["summary"]["latest_total"] == 5000.5
 
 
 async def test_get_performance(server: Any, mock_client: MagicMock) -> None:
@@ -937,7 +946,14 @@ def _make_many_balances(n: int) -> AccountBalancesResult:
         AccountBalance(date=date(2026, 4, 1), user_account_id=1, balance=Decimal("5000.50"))
         for _ in range(n)
     )
-    return AccountBalancesResult(balances=balances)
+    return AccountBalancesResult(
+        balances=balances,
+        summary=AccountBalancesSummary(
+            account_count=1,
+            latest_date=date(2026, 4, 1),
+            latest_total=Decimal("5000.50"),
+        ),
+    )
 
 
 async def test_account_balances_default_limit(server: Any, mock_client: MagicMock) -> None:

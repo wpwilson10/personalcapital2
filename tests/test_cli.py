@@ -30,6 +30,7 @@ from personalcapital2.models import (
     Account,
     AccountBalance,
     AccountBalancesResult,
+    AccountBalancesSummary,
     AccountsResult,
     AccountsSummary,
     BenchmarkPerformance,
@@ -713,7 +714,14 @@ def test_cmd_balances_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
-        instance.get_account_balances.return_value = AccountBalancesResult(balances=(bal,))
+        instance.get_account_balances.return_value = AccountBalancesResult(
+            balances=(bal,),
+            summary=AccountBalancesSummary(
+                account_count=1,
+                latest_date=date(2026, 3, 15),
+                latest_total=Decimal("5432.10"),
+            ),
+        )
         main(["--session", str(session), "balances", "--start", "mb", "--end", "today"])
 
     captured = capsys.readouterr()

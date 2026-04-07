@@ -15,6 +15,7 @@ from personalcapital2.models import (
     Account,
     AccountBalance,
     AccountBalancesResult,
+    AccountBalancesSummary,
     AccountPerformanceSummary,
     AccountsResult,
     AccountsSummary,
@@ -390,6 +391,10 @@ def test_get_account_balances_happy_path() -> None:
     assert result.balances[0].date == date(2026, 3, 15)
     assert result.balances[0].user_account_id == 789
     assert result.balances[0].balance == Decimal("5432.1")
+    assert isinstance(result.summary, AccountBalancesSummary)
+    assert result.summary.account_count == 1
+    assert result.summary.latest_date == date(2026, 3, 15)
+    assert result.summary.latest_total == Decimal("5432.1")
 
 
 @responses.activate
@@ -401,6 +406,9 @@ def test_get_account_balances_empty() -> None:
     client = _make_client()
     result = client.get_account_balances(date(2026, 1, 1), date(2026, 1, 31))
     assert result.balances == ()
+    assert result.summary.account_count == 0
+    assert result.summary.latest_date is None
+    assert result.summary.latest_total == Decimal(0)
 
 
 # --- get_performance ---

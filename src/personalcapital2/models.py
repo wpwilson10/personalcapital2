@@ -143,6 +143,19 @@ class AccountBalance:
 
 
 @dataclass(frozen=True)
+class AccountBalancesSummary:
+    """Summary of account balance history.
+
+    Computed from the parsed balance data (the API does not provide a
+    pre-computed summary for this endpoint).
+    """
+
+    account_count: int
+    latest_date: date | None
+    latest_total: Decimal
+
+
+@dataclass(frozen=True)
 class InvestmentPerformance:
     """Daily cumulative investment performance for a single account."""
 
@@ -611,6 +624,7 @@ class AccountBalancesResult:
     """Response container for get_account_balances()."""
 
     balances: tuple[AccountBalance, ...]
+    summary: AccountBalancesSummary
 
 
 @dataclass(frozen=True)
