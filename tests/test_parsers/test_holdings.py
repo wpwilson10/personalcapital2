@@ -125,3 +125,28 @@ def test_parse_holdings_total_missing() -> None:
     response: dict[str, object] = {"spData": {"holdings": []}}
     result = parse_holdings_total(response)
     assert result == Decimal(0)
+
+
+def test_holding_with_nan_fees_not_dropped() -> None:
+    """Holdings with NaN in optional fee fields should be included, not skipped."""
+    response = _make_response(
+        [
+            {
+                "userAccountId": 123,
+                "ticker": "VTSAX",
+                "description": "Vanguard Total Stock",
+                "quantity": 100.0,
+                "price": 120.0,
+                "value": 12000.0,
+                "feesPerYear": "NaN",
+                "fundFees": "NaN",
+                "oneDayPercentChange": "NaN",
+            }
+        ]
+    )
+    rows = parse_holdings(response, "2026-04-07")
+    assert len(rows) == 1
+    assert rows[0]["fees_per_year"] is None
+    assert rows[0]["fund_fees"] is None
+    assert rows[0]["one_day_percent_change"] is None
+    assert rows[0]["value"] == Decimal("12000")

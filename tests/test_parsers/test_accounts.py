@@ -1,5 +1,6 @@
 """Tests for the accounts parser."""
 
+from decimal import Decimal
 from typing import Any
 
 from personalcapital2.parsers.accounts import parse_accounts, parse_accounts_summary
@@ -171,6 +172,38 @@ def test_parse_accounts_summary() -> None:
     assert result["loan_total"] == 0.0
     assert result["other_asset_total"] == 0.0
     assert result["other_liabilities_total"] == 0.0
+
+
+def test_account_with_nan_fees_not_dropped() -> None:
+    """Accounts with NaN in optional fee fields should be included, not skipped."""
+    response = _make_response(
+        [
+            {
+                "userAccountId": 555,
+                "name": "Investment Account",
+                "firmName": "Fidelity",
+                "accountTypeNew": "INVESTMENT",
+                "productType": "INVESTMENT",
+                "isAsset": True,
+                "createdDate": 1500000000000,
+                "closedDate": "",
+                "feesPerYear": "NaN",
+                "fundFees": "NaN",
+                "totalFee": "NaN",
+                "advisoryFeePercentage": "NaN",
+                "balance": 50000.0,
+            }
+        ]
+    )
+    rows = parse_accounts(response)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["user_account_id"] == 555
+    assert row["fees_per_year"] is None
+    assert row["fund_fees"] is None
+    assert row["total_fee"] is None
+    assert row["advisory_fee_percentage"] is None
+    assert row["balance"] == Decimal("50000")
 
 
 def test_parse_accounts_summary_missing_sp_data() -> None:

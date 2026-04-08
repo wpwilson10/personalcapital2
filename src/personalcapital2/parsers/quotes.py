@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any
 
 from personalcapital2._validation import (
+    is_non_finite,
     safe_decimal,
     safe_decimal_or_none,
     validate_and_extract,
@@ -69,13 +69,6 @@ def parse_portfolio_vs_benchmark(response: dict[str, Any]) -> list[dict[str, Any
     return rows
 
 
-def _is_nan(value: object) -> bool:
-    """Check if a value is NaN (API returns 'NaN' strings or float NaN)."""
-    if isinstance(value, str) and value == "NaN":
-        return True
-    return isinstance(value, float) and math.isnan(value)
-
-
 def parse_portfolio_snapshot(response: dict[str, Any]) -> dict[str, Any]:
     """Extract latest portfolio snapshot from spData.latestPortfolio.
 
@@ -120,7 +113,7 @@ def parse_market_quotes(response: dict[str, Any]) -> list[dict[str, Any]]:
     for q in quotes:
         try:
             last_val = q.get("last")
-            if last_val is None or _is_nan(last_val):
+            if last_val is None or is_non_finite(last_val):
                 skipped += 1
                 continue
             rows.append(

@@ -161,6 +161,72 @@ def test_safe_decimal_or_none_converts_valid_numbers() -> None:
     assert safe_decimal_or_none("99.5", "test") == Decimal("99.5")
 
 
+def test_safe_decimal_or_none_coerces_float_nan_to_none() -> None:
+    from personalcapital2._validation import safe_decimal_or_none
+
+    assert safe_decimal_or_none(float("nan"), "test") is None
+
+
+def test_safe_decimal_or_none_coerces_float_inf_to_none() -> None:
+    from personalcapital2._validation import safe_decimal_or_none
+
+    assert safe_decimal_or_none(float("inf"), "test") is None
+    assert safe_decimal_or_none(float("-inf"), "test") is None
+
+
+def test_safe_decimal_or_none_coerces_string_nan_to_none() -> None:
+    """The Empower API sends fee fields as the string 'NaN'."""
+    from personalcapital2._validation import safe_decimal_or_none
+
+    assert safe_decimal_or_none("NaN", "test") is None
+
+
+def test_safe_decimal_or_none_coerces_string_infinity_to_none() -> None:
+    from personalcapital2._validation import safe_decimal_or_none
+
+    assert safe_decimal_or_none("Infinity", "test") is None
+    assert safe_decimal_or_none("-Infinity", "test") is None
+
+
+def test_safe_decimal_or_none_coerces_decimal_nan_to_none() -> None:
+    from personalcapital2._validation import safe_decimal_or_none
+
+    assert safe_decimal_or_none(Decimal("NaN"), "test") is None
+    assert safe_decimal_or_none(Decimal("Infinity"), "test") is None
+
+
+def test_safe_decimal_or_none_nan_logs_debug(caplog: pytest.LogCaptureFixture) -> None:
+    from personalcapital2._validation import safe_decimal_or_none
+
+    with caplog.at_level(logging.DEBUG, logger="personalcapital2._validation"):
+        safe_decimal_or_none(float("nan"), "myfield")
+
+    assert any("myfield" in r.message and "non-finite" in r.message for r in caplog.records)
+
+
+def test_is_non_finite_helper() -> None:
+    from personalcapital2._validation import is_non_finite
+
+    # Non-finite values
+    assert is_non_finite(float("nan")) is True
+    assert is_non_finite(float("inf")) is True
+    assert is_non_finite(float("-inf")) is True
+    assert is_non_finite(Decimal("NaN")) is True
+    assert is_non_finite(Decimal("Infinity")) is True
+    assert is_non_finite("NaN") is True
+    assert is_non_finite("Infinity") is True
+    assert is_non_finite("-Infinity") is True
+
+    # Finite values
+    assert is_non_finite(0.0) is False
+    assert is_non_finite(3.14) is False
+    assert is_non_finite(Decimal("42")) is False
+    assert is_non_finite("99.5") is False
+    assert is_non_finite(42) is False
+    assert is_non_finite(None) is False
+    assert is_non_finite("not a number") is False
+
+
 def test_safe_decimal_passes_through_decimal() -> None:
     from personalcapital2._validation import safe_decimal
 

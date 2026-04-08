@@ -135,6 +135,34 @@ def test_account_from_dict() -> None:
     assert acct.total_fee == Decimal("60")
 
 
+def test_account_from_dict_nan_fees_become_none() -> None:
+    """NaN fee fields from API should become None in the Account model."""
+    d: dict[str, Any] = {
+        "user_account_id": 555,
+        "account_id": "ACC-555",
+        "name": "Investment",
+        "firm_name": "Fidelity",
+        "account_type": "INVESTMENT",
+        "account_type_group": "INVESTMENT",
+        "product_type": "INVESTMENT",
+        "currency": "USD",
+        "is_asset": True,
+        "is_closed": False,
+        "created_at": "2024-01-01",
+        "balance": 50000.0,
+        "fees_per_year": "NaN",
+        "fund_fees": "NaN",
+        "total_fee": "NaN",
+        "advisory_fee_percentage": "NaN",
+    }
+    acct = account_from_dict(d)
+    assert acct.fees_per_year is None
+    assert acct.fund_fees is None
+    assert acct.total_fee is None
+    assert acct.advisory_fee_percentage is None
+    assert acct.balance == Decimal("50000")
+
+
 def test_account_from_dict_none_optional_fields() -> None:
     d = {
         "user_account_id": 1,

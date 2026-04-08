@@ -132,6 +132,27 @@ def test_parse_account_summaries() -> None:
     assert row["closed_date"] is None
 
 
+def test_investment_performance_nan_coerced_to_none() -> None:
+    """NaN in per-account performance should become None, not skip the entry."""
+    response = {
+        "spData": {
+            "performanceHistory": [
+                {
+                    "date": "2026-03-13",
+                    "aggregatePerformance": 47.24,
+                    "305886794": "NaN",
+                    "1511350375": 0.08,
+                },
+            ]
+        }
+    }
+    rows = parse_investment_performance(response)
+    assert len(rows) == 2
+    by_acct = {r["user_account_id"]: r for r in rows}
+    assert by_acct[305886794]["performance"] is None
+    assert by_acct[1511350375]["performance"] == Decimal("0.08")
+
+
 def test_parse_account_summaries_empty() -> None:
     response: dict[str, object] = {"spData": {"performanceHistory": []}}
     rows = parse_account_summaries(response)

@@ -151,9 +151,32 @@ def safe_decimal(value: object, context: str) -> Decimal:
     raise ValueError(msg)
 
 
+def is_non_finite(value: object) -> bool:
+    """Check whether *value* represents a non-finite number (NaN or Infinity)."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if isinstance(value, Decimal):
+        return not value.is_finite()
+    if isinstance(value, str):
+        try:
+            return not Decimal(value).is_finite()
+        except InvalidOperation:
+            return False
+    return False
+
+
 def safe_decimal_or_none(value: object, context: str) -> Decimal | None:
-    """Convert a value to Decimal or None, rejecting NaN and Infinity."""
+    """Convert a value to Decimal or None, coercing NaN and Infinity to None.
+
+    For optional numeric fields: non-finite values are treated as missing
+    rather than raising, since a NaN fee or percentage is semantically
+    equivalent to "no value."  The strict ``safe_decimal`` still raises
+    for required fields.
+    """
     if value is None:
+        return None
+    if is_non_finite(value):
+        log.debug("%s: coercing non-finite value %r to None", context, value)
         return None
     return safe_decimal(value, context)
 

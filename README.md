@@ -83,5 +83,6 @@ This library uses Empower's unofficial internal web API, which is not affiliated
 - **`is_spending` is unreliable on refunds.** Use `transaction_type` (e.g. `"Refund"`) instead.
 - **`performance` and `benchmarks` share one API call.** `get_performance()` returns both in a single `PerformanceResult`.
 - **`get_accounts` may not list all accounts with holdings.** Some accounts (employer 401k plans, crypto exchanges) can appear in `get_holdings`, `get_account_balances`, and `get_performance` but not in `get_accounts`. Use `get_holdings` to discover investment account IDs.
+- **Fee fields can be `NaN`.** The API returns `"NaN"` for `fees_per_year`, `fund_fees`, `total_fee`, and `advisory_fee_percentage` on some investment accounts (401k plans, crypto, RSUs). These are coerced to `None` — the account is not dropped.
 - **`get_spending` ignores date range and interval.** The API always returns current-period spending for all three interval types (MONTH, WEEK, YEAR), regardless of the `start_date`, `end_date`, or `interval` parameters.
 - **Sessions expire.** Typically 1-2 days. Run `pc2 login` again on auth errors.

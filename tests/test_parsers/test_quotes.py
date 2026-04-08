@@ -138,3 +138,18 @@ def test_parse_market_quotes_skips_nan() -> None:
     rows = parse_market_quotes(response)
     assert len(rows) == 1
     assert rows[0]["ticker"] == "^DJI"
+
+
+def test_portfolio_vs_benchmark_nan_coerced_to_none() -> None:
+    """NaN in optional portfolio/sp500 values should become None, not skip the entry."""
+    response: dict[str, Any] = {
+        "spData": {
+            "histories": [
+                {"date": "2026-03-13", "YOU": "NaN", "^INX": 351.4},
+            ]
+        }
+    }
+    rows = parse_portfolio_vs_benchmark(response)
+    assert len(rows) == 1
+    assert rows[0]["portfolio_value"] is None
+    assert rows[0]["sp500_value"] == Decimal("351.4")
