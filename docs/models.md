@@ -50,6 +50,7 @@ Returned by `client.get_account_balances(start, end)`.
 | Field | Type |
 |---|---|
 | `balances` | `tuple[AccountBalance, ...]` |
+| `summary` | `AccountBalancesSummary` |
 
 ### PerformanceResult
 
@@ -238,6 +239,16 @@ Returned via `AccountBalancesResult.balances` from `client.get_account_balances(
 | `average_out` | `Decimal` |
 | `start_date` | `date` |
 | `end_date` | `date` |
+
+### AccountBalancesSummary
+
+Computed from parsed balance data (the API does not provide a pre-computed summary for this endpoint).
+
+| Field | Type |
+|---|---|
+| `account_count` | `int` |
+| `latest_date` | `date \| None` |
+| `latest_total` | `Decimal` |
 
 ### NetWorthSummary
 
