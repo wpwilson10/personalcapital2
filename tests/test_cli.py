@@ -22,6 +22,7 @@ from personalcapital2.cli import (
     _parse_date,
     _serialize_csv,
     _serialize_json,
+    _validate_dates,
     build_parser,
     main,
 )
@@ -1120,3 +1121,124 @@ def test_cmd_status_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     assert parsed["exists"] is False
     assert parsed["session_path"] == str(session)
     assert "age_seconds" not in parsed
+
+
+# --- CSV nested field serialization tests ---
+
+
+def test_serialize_csv_nested_fields() -> None:
+    """Nested dataclass fields should serialize as JSON strings, not Python repr."""
+    summary = SpendingSummary(
+        type="MONTH",
+        average=Decimal("2000"),
+        current=Decimal("1800"),
+        target=Decimal("2500"),
+        details=(SpendingDetail(date=date(2026, 3, 15), amount=Decimal("42.99")),),
+    )
+    items: list[object] = [summary]
+    result = _serialize_csv(items)
+    lines = result.strip().split("\n")
+    assert len(lines) == 2
+
+    # Parse the CSV row to extract the details column
+    import csv
+    import io
+
+    reader = csv.DictReader(io.StringIO(result))
+    row = next(reader)
+    # details column should be valid JSON, not Python repr
+    details = json.loads(row["details"])
+    assert isinstance(details, list)
+    assert details[0]["date"] == "2026-03-15"
+    assert details[0]["amount"] == 42.99
+
+
+def test_cmd_spending_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Spending CSV output should have valid JSON in the details column."""
+    session = _create_session(tmp_path)
+    result = SpendingResult(
+        intervals=(
+            SpendingSummary(
+                type="MONTH",
+                average=Decimal("2000"),
+                current=Decimal("1800"),
+                target=Decimal("2500"),
+                details=(SpendingDetail(date=date(2026, 3, 15), amount=Decimal("42.99")),),
+            ),
+        ),
+    )
+
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance.load_session = MagicMock()
+        instance.get_spending.return_value = result
+        main(
+            [
+                "--format",
+                "csv",
+                "--session",
+                str(session),
+                "spending",
+                "--start",
+                "mb",
+                "--end",
+                "today",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    lines = captured.out.strip().split("\n")
+    assert len(lines) == 2
+    assert "details" in lines[0]
+    # The details cell should not contain Python repr
+    assert "datetime.date" not in captured.out
+    assert "Decimal" not in captured.out
+
+
+# --- Date validation tests ---
+
+
+def test_validate_dates_valid() -> None:
+    """Valid date range should not raise."""
+    _validate_dates(date(2026, 1, 1), date(2026, 3, 31))
+
+
+def test_validate_dates_same_day() -> None:
+    """Same-day range should not raise."""
+    _validate_dates(date(2026, 3, 15), date(2026, 3, 15))
+
+
+def test_validate_dates_reversed(capsys: pytest.CaptureFixture[str]) -> None:
+    """Reversed dates should exit with EXIT_USAGE and structured JSON error."""
+    with pytest.raises(SystemExit) as exc_info:
+        _validate_dates(date(2026, 3, 31), date(2026, 1, 1))
+    assert exc_info.value.code == EXIT_USAGE
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "UsageError"
+    assert "start date" in err["error"]
+    assert "suggestion" in err
+
+
+def test_cmd_transactions_reversed_dates(tmp_path: Path) -> None:
+    """Reversed dates should exit before calling the API."""
+    session = _create_session(tmp_path)
+    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance.load_session = MagicMock()
+        with pytest.raises(SystemExit) as exc_info:
+            main(
+                [
+                    "--session",
+                    str(session),
+                    "transactions",
+                    "--start",
+                    "today",
+                    "--end",
+                    "30d",
+                ]
+            )
+        assert exc_info.value.code == EXIT_USAGE
+        instance.get_transactions.assert_not_called()

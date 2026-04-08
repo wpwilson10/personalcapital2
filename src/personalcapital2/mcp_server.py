@@ -94,6 +94,8 @@ def _apply_limit(serialized: str, field: str, limit: int) -> str:
     If the field has more than ``limit`` items, truncates the list and adds
     a ``truncated`` metadata field to the JSON output.
     """
+    if limit < 1:
+        return serialized
     data: dict[str, Any] = json.loads(serialized)
     items = data.get(field)
     if not isinstance(items, list) or len(items) <= limit:
@@ -278,6 +280,8 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         """
         if err := _validate_date_range(start_date, end_date):
             return err
+        if limit < 1:
+            return "Error: limit must be at least 1."
         client = _get_client(ctx)
         result = client.get_transactions(start_date, end_date)
         output = serialize_result(result)
@@ -299,6 +303,8 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if the session is expired (re-run `pc2 login`).
         """
+        if limit < 1:
+            return "Error: limit must be at least 1."
         client = _get_client(ctx)
         result = client.get_holdings()
         output = serialize_result(result)
@@ -326,6 +332,8 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         """
         if err := _validate_date_range(start_date, end_date):
             return err
+        if limit < 1:
+            return "Error: limit must be at least 1."
         client = _get_client(ctx)
         result = client.get_net_worth(start_date, end_date)
         output = serialize_result(result)
@@ -355,6 +363,8 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         """
         if err := _validate_date_range(start_date, end_date):
             return err
+        if limit < 1:
+            return "Error: limit must be at least 1."
         client = _get_client(ctx)
         result = client.get_account_balances(start_date, end_date)
         output = serialize_result(result)
@@ -394,6 +404,8 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         """
         if err := _validate_date_range(start_date, end_date):
             return err
+        if limit < 1:
+            return "Error: limit must be at least 1."
         client = _get_client(ctx)
         result = client.get_performance(start_date, end_date, account_ids)
         output = serialize_result(result)

@@ -131,6 +131,17 @@ def _parse_account_ids(s: str) -> list[int]:
         ) from None
 
 
+def _validate_dates(start: date, end: date) -> None:
+    """Exit with a structured error if start > end."""
+    if start > end:
+        _error(
+            f"start date ({start}) is after end date ({end})",
+            "UsageError",
+            EXIT_USAGE,
+            suggestion="Swap --start and --end so start <= end",
+        )
+
+
 def _serialize_json(items: Sequence[object]) -> str:
     """Serialize a sequence of dataclass instances to JSON."""
     rows = [dataclasses.asdict(item) for item in items]  # pyright: ignore[reportArgumentType] — items are dataclass instances
@@ -147,6 +158,9 @@ def _serialize_csv(items: Sequence[object]) -> str:
     writer.writeheader()
     for item in items:
         row = dataclasses.asdict(item)  # pyright: ignore[reportArgumentType] — items are dataclass instances
+        for key, value in row.items():
+            if isinstance(value, list | tuple | dict):
+                row[key] = json.dumps(value, default=_json_default)
         writer.writerow(row)
     return buf.getvalue()
 
@@ -264,6 +278,7 @@ def cmd_transactions(args: argparse.Namespace) -> None:
     fmt: str = args.format
     start: date = args.start
     end: date = args.end
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_transactions(start, end)
     _output(result.transactions, fmt)
@@ -275,6 +290,7 @@ def cmd_categories(args: argparse.Namespace) -> None:
     fmt: str = args.format
     start: date = args.start
     end: date = args.end
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_transactions(start, end)
     _output(result.categories, fmt)
@@ -295,6 +311,7 @@ def cmd_net_worth(args: argparse.Namespace) -> None:
     fmt: str = args.format
     start: date = args.start
     end: date = args.end
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_net_worth(start, end)
     _output(result.entries, fmt)
@@ -306,6 +323,7 @@ def cmd_balances(args: argparse.Namespace) -> None:
     fmt: str = args.format
     start: date = args.start
     end: date = args.end
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_account_balances(start, end)
     _output(result.balances, fmt)
@@ -318,6 +336,7 @@ def cmd_spending(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     interval: str = args.interval
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_spending(start, end, interval)
     _output(result.intervals, fmt)
@@ -330,6 +349,7 @@ def cmd_performance(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     account_ids: list[int] = args.account_ids
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_performance(start, end, account_ids)
     _output(result.investments, fmt)
@@ -342,6 +362,7 @@ def cmd_benchmarks(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     account_ids: list[int] = args.account_ids
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_performance(start, end, account_ids)
     _output(result.benchmarks, fmt)
@@ -353,6 +374,7 @@ def cmd_portfolio(args: argparse.Namespace) -> None:
     fmt: str = args.format
     start: date = args.start
     end: date = args.end
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_quotes(start, end)
     _output(result.portfolio_vs_benchmark, fmt)
@@ -364,6 +386,7 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
     fmt: str = args.format
     start: date = args.start
     end: date = args.end
+    _validate_dates(start, end)
     client = _make_client(session_path)
     result = client.get_quotes(start, end)
     if fmt == "csv":

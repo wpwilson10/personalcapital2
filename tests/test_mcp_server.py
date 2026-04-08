@@ -1156,3 +1156,46 @@ async def test_performance_no_truncation(server: Any, mock_client: MagicMock) ->
     assert len(data["investments"]) == 1
     assert len(data["benchmarks"]) == 1
     assert "truncated" not in data
+
+
+# --- Negative / zero limit tests ---
+
+
+def test_apply_limit_negative() -> None:
+    """_apply_limit should be a no-op for negative limits."""
+    data = json.dumps({"items": [1, 2, 3, 4, 5], "summary": "ok"})
+    result = _apply_limit(data, "items", -1)
+    assert result == data  # Unchanged
+
+
+def test_apply_limit_zero() -> None:
+    """_apply_limit should be a no-op for limit=0."""
+    data = json.dumps({"items": [1, 2, 3, 4, 5], "summary": "ok"})
+    result = _apply_limit(data, "items", 0)
+    assert result == data  # Unchanged
+
+
+async def test_transactions_negative_limit(server: Any, mock_client: MagicMock) -> None:
+    """Negative limit should return an error without calling the API."""
+    text = await _call_tool(
+        server,
+        "get_transactions",
+        {"start_date": "2026-03-01", "end_date": "2026-03-31", "limit": -1},
+        mock_client=mock_client,
+    )
+    assert "Error:" in text
+    assert "limit must be at least 1" in text
+    mock_client.get_transactions.assert_not_called()
+
+
+async def test_holdings_zero_limit(server: Any, mock_client: MagicMock) -> None:
+    """Zero limit should return an error without calling the API."""
+    text = await _call_tool(
+        server,
+        "get_holdings",
+        {"limit": 0},
+        mock_client=mock_client,
+    )
+    assert "Error:" in text
+    assert "limit must be at least 1" in text
+    mock_client.get_holdings.assert_not_called()
