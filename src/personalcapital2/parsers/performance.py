@@ -7,7 +7,6 @@ from typing import Any
 
 from personalcapital2._validation import (
     is_account_id,
-    safe_decimal,
     safe_decimal_or_none,
     validate_and_extract,
     validate_date,
@@ -104,7 +103,7 @@ def parse_benchmark_performance(response: dict[str, Any]) -> list[dict[str, Any]
                     {
                         "date": date,
                         "benchmark": key,
-                        "performance": safe_decimal(value, f"benchmark[{key}]"),
+                        "performance": safe_decimal_or_none(value, f"benchmark[{key}]"),
                     }
                 )
         except (KeyError, ValueError, TypeError) as exc:

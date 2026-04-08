@@ -153,6 +153,26 @@ def test_investment_performance_nan_coerced_to_none() -> None:
     assert by_acct[1511350375]["performance"] == Decimal("0.08")
 
 
+def test_benchmark_performance_nan_no_cascading_drop() -> None:
+    """NaN in one benchmark should not drop other benchmarks for the same date."""
+    response = {
+        "spData": {
+            "benchmarkPerformanceHistory": [
+                {
+                    "date": "2026-03-13",
+                    "^PC_US_STOCKS": "NaN",
+                    "^PC_US_BONDS": 41.46,
+                },
+            ]
+        }
+    }
+    rows = parse_benchmark_performance(response)
+    assert len(rows) == 2
+    by_bench = {r["benchmark"]: r for r in rows}
+    assert by_bench["^PC_US_STOCKS"]["performance"] is None
+    assert by_bench["^PC_US_BONDS"]["performance"] == Decimal("41.46")
+
+
 def test_parse_account_summaries_empty() -> None:
     response: dict[str, object] = {"spData": {"performanceHistory": []}}
     rows = parse_account_summaries(response)
