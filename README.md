@@ -1,22 +1,26 @@
 # personalcapital2
 
-Typed Python client for the Empower (formerly Personal Capital) API. Authenticate, fetch your financial data, and get back clean dataclasses. Based on [haochi/personalcapital](https://github.com/haochi/personalcapital) and [traviscook21/personalcapital](https://github.com/traviscook21/personalcapital) (both MIT), rewritten with type safety, structured error handling, and a typed model layer.
+[![PyPI](https://img.shields.io/pypi/v/personalcapital2)](https://pypi.org/project/personalcapital2/)
+[![Python](https://img.shields.io/pypi/pyversions/personalcapital2)](https://pypi.org/project/personalcapital2/)
+[![License](https://img.shields.io/pypi/l/personalcapital2)](LICENSE)
+
+Typed Python client for the Empower (formerly Personal Capital) API. Authenticate, fetch your financial data, and get back clean dataclasses — frozen dataclasses with `Decimal` values, not raw JSON.
+
+Built on the reverse-engineering work of [haochi/personalcapital](https://github.com/haochi/personalcapital) and [traviscook21/personalcapital](https://github.com/traviscook21/personalcapital) (both MIT).
 
 ## Install
 
-Not yet on PyPI — install directly from GitHub:
-
 ```bash
-pip install git+https://github.com/wpwilson10/personalcapital2.git
+pip install personalcapital2
 # or with uv
-uv add git+https://github.com/wpwilson10/personalcapital2.git
+uv add personalcapital2
 ```
 
 ## Quick start
 
 ```python
 from datetime import date
-from personalcapital2 import EmpowerClient, authenticate
+from personalcapital2 import authenticate
 
 client = authenticate()  # interactive login with 2FA
 
@@ -44,36 +48,21 @@ Sessions are saved and reused until they expire (typically 1-2 days). The sessio
 
 ## CLI
 
-A command-line tool is included as `pc2`. All output is structured JSON — data to stdout, errors to stderr. Run `pc2 --help` for full usage.
+A command-line tool is included as `pc2`. All output is structured JSON. See [CLI Reference](docs/cli.md) for commands, date shortcuts, and examples.
 
 ```bash
-pc2 login                                   # authenticate (interactive 2FA)
 pc2 accounts                                # list linked accounts
 pc2 transactions --start 90d                # last 90 days
-pc2 net-worth --start yb --format csv       # YTD net worth as CSV
-pc2 performance --start mb-6 --account-ids 123,456
+pc2 net-worth --start yb --format csv       # YTD as CSV
 ```
-
-See [CLI Reference](docs/cli.md) for all commands, date shortcuts, exit codes, and error format.
 
 ## Python API
 
-| Method | Returns | Description |
-|---|---|---|
-| `get_accounts()` | `AccountsResult` | Linked accounts + aggregate summary |
-| `get_transactions(start, end)` | `TransactionsResult` | Transactions + categories + cashflow summary |
-| `get_holdings()` | `HoldingsResult` | Investment holdings + total value |
-| `get_net_worth(start, end)` | `NetWorthResult` | Daily net worth + change summary |
-| `get_account_balances(start, end)` | `AccountBalancesResult` | Daily account balances |
-| `get_performance(start, end, account_ids)` | `PerformanceResult` | Investment + benchmark performance |
-| `get_quotes(start, end)` | `QuotesResult` | Portfolio vs benchmark + market quotes |
-| `get_spending(start, end, interval)` | `SpendingResult` | Current spending (all intervals, see quirks) |
-
-All dates are `datetime.date`, financial values are `decimal.Decimal`, models are frozen dataclasses. See [Python API docs](docs/api.md) for response containers and examples, [Model Reference](docs/models.md) for every field and type.
+All methods return frozen dataclasses with `datetime.date` and `decimal.Decimal` fields. See [API Reference](docs/api.md) for methods, response containers, and examples, and [Model Reference](docs/models.md) for every field and type.
 
 ## MCP Server
 
-An MCP tool server exposes all data methods to AI agents (Claude Code, Claude Desktop, etc.) over stdio. Requires the `[mcp]` extra:
+An MCP tool server exposes all data methods to AI agents (Claude Code, Claude Desktop, etc.). Requires the `[mcp]` extra:
 
 ```bash
 pip install "personalcapital2[mcp]"
@@ -85,26 +74,7 @@ Start the server (requires a valid session from `pc2 login`):
 pc2 mcp
 ```
 
-### Client configuration
-
-Add to your MCP client config (Claude Code `settings.json`, Claude Desktop `claude_desktop_config.json`, etc.):
-
-```json
-{
-  "mcpServers": {
-    "empower": {
-      "type": "stdio",
-      "command": "pc2",
-      "args": ["mcp"],
-      "env": {"PC2_SESSION_PATH": "~/.config/personalcapital2/session.json"}
-    }
-  }
-}
-```
-
-All 8 data tools are available: `get_accounts`, `get_transactions`, `get_holdings`, `get_net_worth`, `get_account_balances`, `get_performance`, `get_quotes`, `get_spending`. Tools return JSON strings and handle errors gracefully — expired sessions return a message telling the agent to ask the user to re-run `pc2 login`.
-
-See [MCP Testing Guide](docs/mcp-testing.md) for how to test the server during development.
+See [MCP Testing Guide](docs/mcp-testing.md) for client configuration and testing.
 
 ## Known API quirks
 
@@ -115,12 +85,3 @@ This library uses Empower's unofficial internal web API, which is not affiliated
 - **`get_accounts` may not list all accounts with holdings.** Some accounts (employer 401k plans, crypto exchanges) can appear in `get_holdings`, `get_account_balances`, and `get_performance` but not in `get_accounts`. Use `get_holdings` to discover investment account IDs.
 - **`get_spending` ignores date range and interval.** The API always returns current-period spending for all three interval types (MONTH, WEEK, YEAR), regardless of the `start_date`, `end_date`, or `interval` parameters.
 - **Sessions expire.** Typically 1-2 days. Run `pc2 login` again on auth errors.
-
-## Development
-
-```bash
-uv sync
-uv run pytest
-uv run pyright .
-uv run ruff check .
-```
