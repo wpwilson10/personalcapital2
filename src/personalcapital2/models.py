@@ -170,7 +170,7 @@ class BenchmarkPerformance:
 
     date: date
     benchmark: str
-    performance: Decimal
+    performance: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -308,7 +308,7 @@ def benchmark_performance_from_dict(d: dict[str, Any]) -> BenchmarkPerformance:
     return BenchmarkPerformance(
         date=_parse_date(d["date"]),
         benchmark=d["benchmark"],
-        performance=safe_decimal(d["performance"], "performance"),
+        performance=safe_decimal_or_none(d["performance"], "performance"),
     )
 
 

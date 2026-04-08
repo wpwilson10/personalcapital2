@@ -419,6 +419,18 @@ def test_benchmark_performance_from_dict() -> None:
     assert bp.performance == Decimal("0.1245")
 
 
+def test_benchmark_performance_from_dict_nan_becomes_none() -> None:
+    """NaN performance from the parser (coerced to None) should survive the model converter."""
+    d: dict[str, Any] = {
+        "date": "2026-03-15",
+        "benchmark": "^PC_US_STOCKS",
+        "performance": None,
+    }
+    bp = benchmark_performance_from_dict(d)
+    assert bp.performance is None
+    assert bp.benchmark == "^PC_US_STOCKS"
+
+
 # --- PortfolioVsBenchmark from_dict ---
 
 
