@@ -621,7 +621,14 @@ class EmpowerClient:
             msg = errors[0].get("message", "Unknown error") if errors else "Unknown error"
             raise EmpowerAuthError(f"Password auth failed: {msg}")
 
-        if header.get("authLevel") == "MFA_REQUIRED":
+        auth_level = header.get("authLevel")
+        log.info(
+            "authenticatePassword: authLevel=%s, success=%s",
+            auth_level,
+            header.get("success"),
+        )
+
+        if auth_level != "SESSION_AUTHENTICATED":
             raise TwoFactorRequiredError()
 
         # Update CSRF if the server rotated it

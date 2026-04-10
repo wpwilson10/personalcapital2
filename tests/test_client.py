@@ -117,6 +117,58 @@ def test_login_raises_on_missing_csrf() -> None:
         client.login("user@example.com", "password123")
 
 
+# --- Password auth (authLevel validation) ---
+
+
+def test_authenticate_password_raises_on_non_authenticated_level() -> None:
+    """Stale session returning USER_REMEMBERED should trigger 2FA flow."""
+    client = EmpowerClient()
+    client._csrf = "test-csrf"
+
+    auth_resp = _mock_response(
+        json_data={"spHeader": {"success": True, "authLevel": "USER_REMEMBERED", "csrf": "new"}}
+    )
+
+    with (
+        patch.object(client._session, "post", return_value=auth_resp),
+        pytest.raises(TwoFactorRequiredError),
+    ):
+        client._authenticate_password("password123")
+
+
+def test_authenticate_password_raises_on_mfa_required() -> None:
+    """MFA_REQUIRED after password auth should still raise TwoFactorRequiredError."""
+    client = EmpowerClient()
+    client._csrf = "test-csrf"
+
+    auth_resp = _mock_response(
+        json_data={"spHeader": {"success": True, "authLevel": "MFA_REQUIRED", "csrf": "new"}}
+    )
+
+    with (
+        patch.object(client._session, "post", return_value=auth_resp),
+        pytest.raises(TwoFactorRequiredError),
+    ):
+        client._authenticate_password("password123")
+
+
+def test_authenticate_password_success() -> None:
+    """SESSION_AUTHENTICATED should succeed and update CSRF."""
+    client = EmpowerClient()
+    client._csrf = "old-csrf"
+
+    auth_resp = _mock_response(
+        json_data={
+            "spHeader": {"success": True, "authLevel": "SESSION_AUTHENTICATED", "csrf": "new-csrf"}
+        }
+    )
+
+    with patch.object(client._session, "post", return_value=auth_resp):
+        client._authenticate_password("password123")
+
+    assert client._csrf == "new-csrf"
+
+
 # --- Fetch ---
 
 
@@ -250,7 +302,11 @@ def test_2fa_sms_flow() -> None:
         json_data={"spHeader": {"success": True, "csrf": "post-challenge"}}
     )
     verify_resp = _mock_response(json_data={"spHeader": {"success": True, "csrf": "post-verify"}})
-    auth_resp = _mock_response(json_data={"spHeader": {"success": True, "csrf": "final"}})
+    auth_resp = _mock_response(
+        json_data={
+            "spHeader": {"success": True, "authLevel": "SESSION_AUTHENTICATED", "csrf": "final"}
+        }
+    )
 
     side_effects = [challenge_resp, verify_resp, auth_resp]
     with patch.object(client._session, "post", side_effect=side_effects):
