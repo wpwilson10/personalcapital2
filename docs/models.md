@@ -122,6 +122,8 @@ Returned by `client.get_spending(start, end, interval)`.
 | `original_description` | `str \| None` |
 | `simple_description` | `str \| None` |
 | `category_id` | `int \| None` |
+| `category_name` | `str \| None` |
+| `category_type` | `str \| None` |
 | `merchant` | `str \| None` |
 | `merchant_id` | `str \| None` |
 | `merchant_type` | `str \| None` |

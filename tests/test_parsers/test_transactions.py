@@ -52,6 +52,8 @@ def test_parse_transaction() -> None:
     assert row["is_spending"] is True
     assert row["description"] == "Uber"
     assert row["category_id"] == 39
+    assert row["category_name"] == "Travel"
+    assert row["category_type"] == "EXPENSE"
     assert row["merchant_id"] == "abc123"
     assert row["merchant_type"] == "RIDE_SHARE"
     assert row["sub_type"] == "debit"
@@ -71,6 +73,8 @@ def test_parse_transaction_missing_optional_new_fields() -> None:
     rows = parse_transactions(response)
     assert len(rows) == 1
     row = rows[0]
+    assert row["category_name"] is None
+    assert row["category_type"] is None
     assert row["merchant_id"] is None
     assert row["merchant_type"] is None
     assert row["sub_type"] is None

@@ -137,6 +137,8 @@ def parse_transactions(response: dict[str, Any]) -> list[dict[str, Any]]:
                     "original_description": txn.get("originalDescription"),
                     "simple_description": txn.get("simpleDescription"),
                     "category_id": txn.get("categoryId"),
+                    "category_name": txn.get("categoryName"),
+                    "category_type": txn.get("categoryType"),
                     "merchant": txn.get("merchant"),
                     "merchant_id": txn.get("merchantId"),
                     "merchant_type": txn.get("merchantType"),

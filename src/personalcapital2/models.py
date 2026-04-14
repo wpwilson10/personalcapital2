@@ -74,6 +74,8 @@ class Transaction:
     original_description: str | None
     simple_description: str | None
     category_id: int | None
+    category_name: str | None
+    category_type: str | None
     merchant: str | None
     transaction_type: str | None
     sub_type: str | None
@@ -225,6 +227,8 @@ def transaction_from_dict(d: dict[str, Any]) -> Transaction:
         original_description=d["original_description"],
         simple_description=d["simple_description"],
         category_id=d["category_id"],
+        category_name=d["category_name"],
+        category_type=d["category_type"],
         merchant=d["merchant"],
         merchant_id=d["merchant_id"],
         merchant_type=d["merchant_type"],

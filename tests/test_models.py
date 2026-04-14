@@ -73,6 +73,8 @@ def test_transaction_is_frozen() -> None:
         original_description=None,
         simple_description=None,
         category_id=None,
+        category_name=None,
+        category_type=None,
         merchant=None,
         merchant_id=None,
         merchant_type=None,
@@ -207,6 +209,8 @@ def test_transaction_from_dict() -> None:
         "original_description": "GROCERY STORE #1234",
         "simple_description": "Grocery",
         "category_id": 7,
+        "category_name": "Groceries",
+        "category_type": "EXPENSE",
         "merchant": "FreshMart",
         "merchant_id": "mid-123",
         "merchant_type": "GROCERY",
@@ -223,6 +227,8 @@ def test_transaction_from_dict() -> None:
     assert txn.is_spending is True
     assert txn.original_description == "GROCERY STORE #1234"
     assert txn.category_id == 7
+    assert txn.category_name == "Groceries"
+    assert txn.category_type == "EXPENSE"
     assert txn.merchant == "FreshMart"
     assert txn.merchant_id == "mid-123"
     assert txn.merchant_type == "GROCERY"
@@ -243,6 +249,8 @@ def test_transaction_from_dict_none_optional_fields() -> None:
         "original_description": None,
         "simple_description": None,
         "category_id": None,
+        "category_name": None,
+        "category_type": None,
         "merchant": None,
         "merchant_id": None,
         "merchant_type": None,
@@ -256,6 +264,8 @@ def test_transaction_from_dict_none_optional_fields() -> None:
     assert txn.original_description is None
     assert txn.simple_description is None
     assert txn.category_id is None
+    assert txn.category_name is None
+    assert txn.category_type is None
     assert txn.merchant is None
     assert txn.merchant_id is None
     assert txn.merchant_type is None
