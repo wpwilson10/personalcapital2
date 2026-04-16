@@ -1,5 +1,6 @@
 # personalcapital2
 
+[![CI](https://github.com/wpwilson10/personalcapital2/actions/workflows/ci.yml/badge.svg)](https://github.com/wpwilson10/personalcapital2/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/personalcapital2)](https://pypi.org/project/personalcapital2/)
 [![Python](https://img.shields.io/pypi/pyversions/personalcapital2)](https://pypi.org/project/personalcapital2/)
 [![License](https://img.shields.io/pypi/l/personalcapital2)](LICENSE)
@@ -50,7 +51,7 @@ print(f"Net cashflow: ${result.summary.net_cashflow:,.2f}")
 | `EMPOWER_PASSWORD` | Empower account password |
 | `PC2_SESSION_PATH` | Custom session file location (default: `~/.config/personalcapital2/session.json`) |
 
-Sessions are saved and reused until they expire (typically 1-2 days). The session path can also be overridden per-command with `--session`.
+Credentials are sent directly to Empower's servers over HTTPS — this library never stores, logs, or transmits them anywhere else. Sessions are saved and reused until they expire (typically 1-2 days). The session path can also be overridden per-command with `--session`.
 
 ## CLI
 
