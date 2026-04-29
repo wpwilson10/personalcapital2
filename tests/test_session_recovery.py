@@ -249,14 +249,18 @@ def test_authenticate_non_tty_verify_code_prompt(
 
     _FakeClient.login_recipe = [TwoFactorRequiredError()]
 
-    inputs: list[str] = ["1"]  # 2FA-method prompt answered, code prompt EOFs
+    # First input() call answers the 2FA-method prompt; the next one (code prompt) EOFs.
+    # _prompt() writes the message to stderr and calls input() without args, so we can't
+    # dispatch on prompt content — track call ordering with a queue instead.
+    answers = iter(["1"])
 
-    def maybe_eof(prompt: str = "") -> str:
-        if "verification code" in prompt:
-            raise EOFError
-        return inputs.pop(0)
+    def queued_or_eof(_prompt: str = "") -> str:
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError from None
 
-    _patch_input(monkeypatch, maybe_eof)
+    _patch_input(monkeypatch, queued_or_eof)
 
     with pytest.raises(InteractiveAuthRequired, match="2FA verification cannot complete"):
         authenticate(session_path)
@@ -316,6 +320,9 @@ def test_run_authenticated_propagates_interactive_required(
     """If re-auth itself fails with InteractiveAuthRequired (no TTY), the
     outer caller sees that error — operation is not retried."""
     session_path = tmp_path / "session.json"
+    # Cached session must exist so run_authenticated runs the operation first
+    # (the cold-start short-circuit would otherwise authenticate up front).
+    session_path.write_text("{}")
     monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
     monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
 
@@ -346,6 +353,9 @@ def test_run_authenticated_does_not_recover_from_2fa_required(
     """TwoFactorRequiredError is a control-flow signal, not a stale-session
     error — run_authenticated must propagate it without calling authenticate()."""
     session_path = tmp_path / "session.json"
+    # Cached session must exist so the short-circuit doesn't auth up front
+    # (which would defeat the assertion that authenticate() is never called).
+    session_path.write_text("{}")
 
     auth_calls = {"n": 0}
 
@@ -399,3 +409,101 @@ def test_run_authenticated_does_not_retry_twice(
 
     assert op_calls["n"] == 2, "operation must run exactly twice (initial + one retry)"
     assert auth_calls["n"] == 1, "authenticate must run exactly once"
+
+
+# --- 11. Credential prompts must not leak to stdout (CLI JSON-on-stdout contract) ---
+
+
+def test_authenticate_prompts_do_not_leak_to_stdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Stale-session recovery from a data command runs ``authenticate()``
+    mid-pipeline. Any prompts must go to stderr — anything on stdout would
+    corrupt the CLI's structured-JSON output and break agents/scripts piping
+    ``pc2 ... | jq``.
+    """
+    session_path = tmp_path / "session.json"
+    monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
+    monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
+
+    def raise_eof(_prompt: str = "") -> str:
+        raise EOFError
+
+    _patch_input(monkeypatch, raise_eof)
+
+    with pytest.raises(InteractiveAuthRequired):
+        authenticate(session_path)
+
+    captured = capsys.readouterr()
+    assert captured.out == "", (
+        f"authenticate() must not write prompts to stdout; got {captured.out!r}"
+    )
+    # The "Email: " prompt should be the thing that hit stderr.
+    assert "Email:" in captured.err
+
+
+# --- 12. Cold start short-circuits to authenticate() — no wasted API round-trip ---
+
+
+def test_run_authenticated_cold_start_short_circuits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_creds: None,
+) -> None:
+    """When no session file exists, run_authenticated() must call authenticate()
+    BEFORE running the operation, so a fresh install/logout doesn't burn a
+    network round-trip the API would reject anyway. Also avoids the misleading
+    'Session is stale, re-authenticating' log line for an absent session.
+    """
+    session_path = tmp_path / "session.json"  # does NOT exist
+    assert not session_path.exists()
+
+    _FakeClient.login_recipe = [None]  # initial authenticate succeeds
+
+    auth_calls = {"n": 0}
+    real_authenticate = authenticate
+
+    def counting_authenticate(path: Path = session_path) -> Any:
+        auth_calls["n"] += 1
+        return real_authenticate(path)
+
+    monkeypatch.setattr("personalcapital2.auth.authenticate", counting_authenticate)
+
+    op_calls = {"n": 0}
+
+    def operation(client: Any) -> str:
+        op_calls["n"] += 1
+        return "ok"
+
+    result = run_authenticated(operation, session_path)
+
+    assert result == "ok"
+    assert auth_calls["n"] == 1, "authenticate must run once up front (cold start)"
+    assert op_calls["n"] == 1, "operation must run exactly once after authenticate succeeds"
+
+
+def test_run_authenticated_cached_session_skips_short_circuit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a session file already exists, run_authenticated() must run the
+    operation without calling authenticate() up front — that's the whole point
+    of cached sessions."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text("{}")  # cached session present
+
+    auth_calls = {"n": 0}
+
+    def fake_authenticate(path: Path = session_path) -> Any:
+        auth_calls["n"] += 1
+        raise AssertionError("authenticate must NOT be called when a session exists")
+
+    monkeypatch.setattr("personalcapital2.auth.authenticate", fake_authenticate)
+
+    def operation(client: Any) -> str:
+        return "ok"
+
+    assert run_authenticated(operation, session_path) == "ok"
+    assert auth_calls["n"] == 0

@@ -1339,3 +1339,56 @@ def test_data_command_recovers_from_stale_session(
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
     assert parsed[0]["user_account_id"] == 100
+
+
+def test_singleton_exception_group_is_unwrapped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """FastMCP's anyio TaskGroup wraps lifespan errors in BaseExceptionGroup.
+    Without unwrapping, ``pc2 mcp`` failures surface as a useless 'unhandled
+    errors in a TaskGroup' message at exit code 4. After unwrapping, the
+    inner typed exception flows through the existing handler chain."""
+    session = _create_session(tmp_path)
+
+    inner = EmpowerAuthError("No session file at /tmp/missing.json")
+
+    def raising_cmd(args: object) -> None:
+        raise BaseExceptionGroup("unhandled errors in a TaskGroup", [inner])
+
+    with (
+        patch("personalcapital2.cli.cmd_accounts", raising_cmd),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(["--session", str(session), "accounts"])
+
+    assert exc_info.value.code == EXIT_AUTH
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "EmpowerAuthError"
+    assert "No session file" in err["error"]
+    assert err["suggestion"] == "pc2 login"
+
+
+def test_multi_exception_group_is_not_unwrapped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When a BaseExceptionGroup carries more than one error, we cannot pick
+    a single typed cause — fall through to the unexpected-error envelope."""
+    session = _create_session(tmp_path)
+
+    def raising_cmd(args: object) -> None:
+        raise BaseExceptionGroup(
+            "multiple failures",
+            [EmpowerAuthError("a"), EmpowerNetworkError("b")],
+        )
+
+    with (
+        patch("personalcapital2.cli.cmd_accounts", raising_cmd),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(["--session", str(session), "accounts"])
+
+    # Multi-exception groups don't get unwrapped — they hit the generic Exception
+    # branch with EXIT_UNEXPECTED.
+    assert exc_info.value.code != EXIT_AUTH
+    assert exc_info.value.code != EXIT_NETWORK

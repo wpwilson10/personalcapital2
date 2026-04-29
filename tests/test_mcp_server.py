@@ -582,7 +582,12 @@ async def test_reversed_dates_return_error(server: Any, mock_client: MagicMock) 
 
 
 async def test_missing_session_file(tmp_path: Path) -> None:
-    """Server should raise when session file doesn't exist."""
+    """Server should raise EmpowerAuthError (wrapped in ExceptionGroup by
+    anyio) when the session file is missing — so the CLI's typed-handler
+    chain maps it to EXIT_AUTH=1 with the 'pc2 login' suggestion after
+    the singleton-group unwrap."""
+    from personalcapital2.exceptions import EmpowerAuthError
+
     missing = tmp_path / "nonexistent.json"
     srv = create_server(session_path=missing)
 
@@ -592,11 +597,16 @@ async def test_missing_session_file(tmp_path: Path) -> None:
         async with create_connected_server_and_client_session(srv._mcp_server):
             pass
 
-    # The FileNotFoundError is wrapped in ExceptionGroup by anyio
-    exc_text = str(exc_info.value)
-    if hasattr(exc_info.value, "exceptions"):
-        exc_text = " ".join(str(e) for e in exc_info.value.exceptions)  # type: ignore[union-attr]
-    assert "No session file" in exc_text
+    # anyio TaskGroup wraps the lifespan exception in BaseExceptionGroup.
+    # Walk down singleton groups to find the real cause.
+    cause: BaseException = exc_info.value
+    while isinstance(cause, BaseExceptionGroup) and len(cause.exceptions) == 1:
+        cause = cause.exceptions[0]
+
+    assert isinstance(cause, EmpowerAuthError), (
+        f"missing session must raise EmpowerAuthError, got {type(cause).__name__}: {cause}"
+    )
+    assert "No session file" in str(cause)
 
 
 # --- Tool registration tests ---

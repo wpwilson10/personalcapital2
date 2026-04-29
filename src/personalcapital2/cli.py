@@ -21,7 +21,7 @@ import sys
 from datetime import date, timedelta
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, NoReturn, cast
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -737,6 +737,26 @@ client config (Claude Code / Claude Desktop):
     return parser
 
 
+def _unwrap_singleton_group(exc: BaseException) -> BaseException:
+    """Strip nested singleton BaseExceptionGroup wrappers to expose the real cause.
+
+    FastMCP's lifespan runs under an anyio TaskGroup, which wraps any startup
+    exception in a BaseExceptionGroup. Without this, ``pc2 mcp`` failures
+    surface as a useless ``"unhandled errors in a TaskGroup (1 sub-exception)"``
+    message and exit code 4, instead of the underlying typed error.
+    """
+    while isinstance(exc, BaseExceptionGroup):
+        # BaseExceptionGroup is generic in the contained-exception type and
+        # pyright leaves the type variable unbound here, surfacing as Unknown.
+        # Cast to the typeshed-documented upper bound (tuple[BaseException, ...])
+        # to keep strict-mode clean without disabling reportUnknownMemberType.
+        nested = cast("tuple[BaseException, ...]", exc.exceptions)
+        if len(nested) != 1:
+            return cast("BaseException", exc)
+        exc = nested[0]
+    return exc
+
+
 def main(argv: list[str] | None = None) -> None:
     """CLI entry point."""
     parser = build_parser()
@@ -747,8 +767,17 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(EXIT_USAGE)
 
     try:
-        func = args.func
-        func(args)
+        try:
+            func = args.func
+            func(args)
+        except BaseExceptionGroup as eg:
+            # Re-raise the singleton inner exception so the typed-handler chain
+            # below dispatches on the real cause (e.g. EmpowerAuthError from a
+            # FastMCP lifespan), not the opaque group wrapper.
+            cause = _unwrap_singleton_group(eg)
+            if cause is eg:
+                raise
+            raise cause from eg
     except EmpowerAuthError as e:
         _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion="pc2 login")
     except EmpowerNetworkError as e:

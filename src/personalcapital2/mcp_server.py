@@ -231,7 +231,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     @asynccontextmanager
     async def lifespan(server: FastMCP) -> AsyncIterator[_AppContext]:
         if not resolved_path.exists():
-            raise FileNotFoundError(
+            # EmpowerAuthError (not FileNotFoundError) so the CLI's typed handler
+            # chain maps it to EXIT_AUTH=1 with a "pc2 login" suggestion.
+            raise EmpowerAuthError(
                 f"No session file at {resolved_path}. Authenticate first by running: pc2 login"
             )
         client = EmpowerClient(session_path=resolved_path)

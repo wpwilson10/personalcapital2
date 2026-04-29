@@ -5,6 +5,7 @@ from __future__ import annotations
 import getpass
 import logging
 import os
+import sys
 from pathlib import Path  # noqa: TC003 — used at runtime for default arg and file ops
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,19 @@ from personalcapital2.exceptions import (
 from personalcapital2.types import TwoFactorMode
 
 log = logging.getLogger(__name__)
+
+
+def _prompt(message: str) -> str:
+    """Read a line from stdin, writing the prompt to stderr.
+
+    Python's ``input(prompt)`` writes the prompt to stdout, which corrupts the
+    CLI's JSON-on-stdout contract when ``run_authenticated`` triggers credential
+    prompts mid-command (e.g. on stale-session recovery). Route prompts to
+    stderr instead so stdout stays clean for piping/JSON parsing.
+    """
+    sys.stderr.write(message)
+    sys.stderr.flush()
+    return input()
 
 
 def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
@@ -45,8 +59,8 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
         EmpowerAuthError: if login fails for credential or server reasons.
     """
     try:
-        email = os.getenv("EMPOWER_EMAIL") or input("Email: ")
-        password = os.getenv("EMPOWER_PASSWORD") or getpass.getpass("Password: ")
+        email = os.getenv("EMPOWER_EMAIL") or _prompt("Email: ")
+        password = os.getenv("EMPOWER_PASSWORD") or getpass.getpass("Password: ", stream=sys.stderr)
     except EOFError:
         raise InteractiveAuthRequired(
             "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
@@ -63,10 +77,10 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
             pass
 
         try:
-            print("\n2FA required. Choose method:")
-            print("  1. SMS")
-            print("  2. Email")
-            choice = input("Choice [1]: ").strip() or "1"
+            print("\n2FA required. Choose method:", file=sys.stderr)
+            print("  1. SMS", file=sys.stderr)
+            print("  2. Email", file=sys.stderr)
+            choice = _prompt("Choice [1]: ").strip() or "1"
         except EOFError:
             raise InteractiveAuthRequired(
                 "2FA cannot complete without an interactive terminal. "
@@ -96,7 +110,7 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
     # nuke the session. EOFError on the code prompt → typed exception.
     if mode is not None:
         try:
-            code = input("Enter verification code: ")
+            code = _prompt("Enter verification code: ")
         except EOFError:
             raise InteractiveAuthRequired(
                 "2FA verification cannot complete without an interactive terminal."
@@ -141,7 +155,15 @@ def run_authenticated[T](
             also fails.
     """
     if client is None:
-        client = EmpowerClient(session_path=session_path)
+        # Short-circuit cold starts: if there's no cached session, skip the
+        # round-trip we know the API would reject and authenticate up front.
+        # Avoids a misleading "Session is stale" log line for missing sessions
+        # and eliminates a wasted network call on every fresh install.
+        if not session_path.exists():
+            log.info("No cached session at %s, authenticating", session_path)
+            client = authenticate(session_path)
+        else:
+            client = EmpowerClient(session_path=session_path)
     try:
         return operation(client)
     except TwoFactorRequiredError:
