@@ -170,6 +170,11 @@ def run_authenticated[T](
         # Control-flow signal, not a session problem — let the caller handle it.
         raise
     except EmpowerAuthError as e:
-        log.warning("Session is stale, re-authenticating: %s", e)
+        # An empty/malformed session file leaves the client with no cookies,
+        # so "stale" is misleading — there was nothing to go stale.
+        if client.has_loaded_session:
+            log.warning("Session is stale, re-authenticating: %s", e)
+        else:
+            log.warning("Cached session unusable, re-authenticating: %s", e)
         fresh_client = authenticate(session_path)
         return operation(fresh_client)

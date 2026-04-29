@@ -200,9 +200,23 @@ class EmpowerClient:
             }
         )
         self._csrf = ""
+        self._loaded_from_disk = False
         self._session_path = session_path
         if session_path is not None:
             self.load_session()
+
+    @property
+    def has_loaded_session(self) -> bool:
+        """True if this client was constructed with usable cached session state.
+
+        Snapshot taken in ``load_session`` — does NOT reflect cookies the
+        server set during a later request. ``run_authenticated`` uses this
+        to distinguish "session went stale on the server" (cookies/CSRF
+        were loaded from disk, server rejected them) from "session file was
+        empty/malformed" (nothing ever loaded, request was unauthenticated
+        from the start) for accurate recovery logging.
+        """
+        return self._loaded_from_disk
 
     # --- Authentication ---
 
@@ -535,6 +549,7 @@ class EmpowerClient:
                 return
             self._csrf = csrf
             self._session.cookies = requests.utils.cookiejar_from_dict(cookies)  # type: ignore[no-untyped-call] — requests.utils is untyped
+            self._loaded_from_disk = True
             log.info("Loaded session from %s", self._session_path)
         except (json.JSONDecodeError, KeyError, ValueError, AttributeError) as err:
             log.warning("Could not load session: %s", err)

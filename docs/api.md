@@ -90,3 +90,59 @@ data = client.fetch("/newaccount/getAccounts2")
 rows = parse_accounts(data)
 # list[dict[str, Any]] — raw parser output, no dataclass conversion
 ```
+
+## Stale-session recovery: `run_authenticated`
+
+`run_authenticated(operation, session_path)` wraps any `EmpowerClient` call so stale cached cookies trigger a one-shot re-authentication and retry instead of an unrecoverable failure. The `pc2` CLI uses this for every data command — library callers can use it the same way.
+
+```python
+from datetime import date
+from personalcapital2 import run_authenticated
+
+# If the cached session is stale, authenticate() runs once and the operation
+# is retried. A second failure propagates.
+result = run_authenticated(lambda c: c.get_accounts())
+
+result = run_authenticated(
+    lambda c: c.get_net_worth(date(2026, 1, 1), date(2026, 3, 31)),
+)
+```
+
+The operation **must be idempotent** — it can run twice on the recovery path. All `EmpowerClient.get_*` methods are read-only and safe to retry.
+
+If `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` aren't set, recovery prompts for credentials interactively. Set them to avoid mid-command prompts in scripts. In non-TTY environments, recovery raises `InteractiveAuthRequired` instead of hanging.
+
+## Exceptions
+
+All exceptions are exported from the package root.
+
+| Exception | Raised when |
+|---|---|
+| `EmpowerAuthError` | Login failed (bad credentials, CSRF extraction failure), session is stale, or 2FA prompt couldn't complete. |
+| `InteractiveAuthRequired` | Subclass of `EmpowerAuthError`. Authentication needs an interactive terminal but none is available (no TTY, env vars unset). Lets callers distinguish "no TTY" from "bad credentials" without parsing strings. |
+| `TwoFactorRequiredError` | Subclass of `EmpowerAuthError`. The server requires 2FA before password auth can proceed. Used as a control-flow signal during the login flow; `run_authenticated` re-raises it without retry. |
+| `EmpowerAPIError` | The HTTP request reached Empower and got a structured rejection (`spHeader.success = false`) or returned non-JSON. |
+| `EmpowerNetworkError` | Transport-level failure reaching Empower (connection refused, timeout, DNS). Distinct from `EmpowerAuthError` (4xx auth) and `EmpowerAPIError` (server-side rejection). |
+
+```python
+from personalcapital2 import (
+    EmpowerAPIError,
+    EmpowerAuthError,
+    EmpowerNetworkError,
+    InteractiveAuthRequired,
+    TwoFactorRequiredError,
+    run_authenticated,
+)
+
+try:
+    result = run_authenticated(lambda c: c.get_accounts())
+except InteractiveAuthRequired:
+    # Headless environment, no creds — surface a clear error to the caller
+    ...
+except EmpowerNetworkError:
+    # Retry later, alert ops, etc.
+    ...
+except EmpowerAuthError:
+    # Re-auth path also failed — bad creds or 2FA needed
+    ...
+```

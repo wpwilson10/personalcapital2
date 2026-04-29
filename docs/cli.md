@@ -32,7 +32,23 @@ pc2 transactions --start 30d --format csv
 
 # Raw API call
 pc2 raw /newaccount/getAccounts2
+
+# Start the MCP tool server (requires the [mcp] extra)
+pc2 mcp
 ```
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `EMPOWER_EMAIL` | Empower account email (skips the email prompt) |
+| `EMPOWER_PASSWORD` | Empower account password (skips the password prompt). Setting both `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` lets stale-session recovery run without prompting mid-command. |
+| `PC2_SESSION_PATH` | Override the default session file path (default: `~/.config/personalcapital2/session.json`). Per-command override: `--session PATH`. |
+| `PC2_MCP_MAX_CHARS` | MCP-server-only. Soft cap on tool response size in characters (default: 50,000 ≈ 12,500 tokens). Lists are truncated with `truncated` metadata before exceeding the cap. |
+
+## Stale-session recovery
+
+If the cached session is rejected by Empower mid-command, `pc2` re-authenticates and retries the request once. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` to avoid a mid-command credential prompt during recovery. Headless 2FA isn't supported yet — non-TTY environments fail fast with a structured `EmpowerAuthError` rather than hanging on the prompt.
 
 ## Exit codes
 
@@ -41,8 +57,9 @@ pc2 raw /newaccount/getAccounts2
 | 0 | Success |
 | 1 | Authentication error (no session, expired, 2FA required) |
 | 2 | Usage error (bad arguments, unknown command) |
-| 3 | API error (request failed, rate limited) |
+| 3 | API error (request failed, rate limited, HTTP 4xx/5xx from Empower) |
 | 4 | Unexpected error |
+| 5 | Network error (transport-level failure reaching Empower) |
 
 ## Structured errors
 

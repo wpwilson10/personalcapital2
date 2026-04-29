@@ -51,7 +51,7 @@ print(f"Net cashflow: ${result.summary.net_cashflow:,.2f}")
 | `EMPOWER_PASSWORD` | Empower account password |
 | `PC2_SESSION_PATH` | Custom session file location (default: `~/.config/personalcapital2/session.json`) |
 
-Credentials are sent directly to Empower's servers over HTTPS — this library never stores, logs, or transmits them anywhere else. Sessions are saved and reused until they expire (typically 1-2 days). The session path can also be overridden per-command with `--session`.
+Credentials are sent directly to Empower's servers over HTTPS — this library never stores, logs, or transmits them anywhere else. Sessions are saved and reused until they expire — typically within ~24 hours, sometimes sooner. The session path can also be overridden per-command with `--session`.
 
 ## CLI
 
@@ -108,7 +108,7 @@ CLI exit codes:
 | `0` | success |
 | `1` | authentication error (no session, expired, 2FA required) |
 | `2` | usage error (bad arguments, unknown command) |
-| `3` | API error (request failed, rate limited) |
+| `3` | API error (request failed, rate limited, HTTP 4xx/5xx from Empower) |
 | `4` | unexpected error |
 | `5` | network error (transport-level failure reaching Empower) |
 

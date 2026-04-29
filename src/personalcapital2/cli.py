@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, NoReturn, cast
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+import requests
+
 from personalcapital2._serialization import json_default as _json_default
 from personalcapital2.auth import authenticate, run_authenticated
 from personalcapital2.client import DEFAULT_SESSION_PATH
@@ -788,6 +790,14 @@ def main(argv: list[str] | None = None) -> None:
         )
     except EmpowerAPIError as e:
         _error(str(e), "EmpowerAPIError", EXIT_API)
+    except requests.HTTPError as e:
+        # 4xx/5xx from raise_for_status (e.g. `pc2 raw` against a typo'd
+        # endpoint). Route to EXIT_API so agents see "API problem", not
+        # "unexpected" — the call reached Empower and got a structured
+        # rejection.
+        status = e.response.status_code if e.response is not None else None
+        msg = f"HTTP {status}: {e}" if status is not None else str(e)
+        _error(msg, "EmpowerAPIError", EXIT_API)
     except KeyboardInterrupt:
         sys.exit(130)
     except SystemExit:

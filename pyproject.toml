@@ -1,6 +1,6 @@
 [project]
 name = "personalcapital2"
-version = "0.2.1"
+version = "0.2.2"
 description = "Python client for the Empower (Personal Capital) unofficial API"
 readme = "README.md"
 license = "MIT"

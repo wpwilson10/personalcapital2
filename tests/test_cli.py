@@ -1029,6 +1029,37 @@ def test_api_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     assert err["type"] == "EmpowerAPIError"
 
 
+def test_http_error_exits_api_not_unexpected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A 4xx/5xx from the server (e.g. `pc2 raw` against a typo'd endpoint)
+    must surface as EXIT_API with EmpowerAPIError, not as the generic
+    EXIT_UNEXPECTED. Agents pin behavior to exit codes — 404 is an API
+    problem, not an unexpected one."""
+    import requests
+
+    session = _create_session(tmp_path)
+
+    response = MagicMock()
+    response.status_code = 404
+    http_err = requests.HTTPError("404 Client Error: Not Found for url: https://x/y")
+    http_err.response = response
+
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance.load_session = MagicMock()
+        instance.fetch.side_effect = http_err
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--session", str(session), "raw", "/no-such-endpoint"])
+
+    assert exc_info.value.code == EXIT_API
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "EmpowerAPIError"
+    assert "404" in err["error"]
+
+
 def test_no_session_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """No cached session + non-TTY environment → first fetch raises auth error
     → run_authenticated calls authenticate() → mocked authenticate raises

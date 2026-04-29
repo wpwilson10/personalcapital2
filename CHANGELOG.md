@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-04-28
+
+### Added
+
+- **`EmpowerClient.has_loaded_session`** — boolean property that reports
+  whether the client successfully loaded session state from disk. Snapshot
+  taken at `load_session()` time, not live state — so a failed fetch that
+  picks up server-set tracking cookies does not flip the value.
+
+### Fixed
+
+- **`pc2 raw` against an unknown endpoint now exits 3, not 4.** A 4xx/5xx
+  from `raise_for_status` was leaking to `EXIT_UNEXPECTED` with
+  `type=HTTPError`. Agents that pin behavior to exit codes saw "unexpected"
+  for what is actually an API problem; now routed through `EXIT_API` with
+  `type=EmpowerAPIError` and an `HTTP {status}: ...` message.
+- **Stale-session recovery log line is now accurate.** When the cached
+  session file is empty/malformed (no cookies ever loaded), recovery now
+  logs `"Cached session unusable, re-authenticating"` instead of the
+  misleading `"Session is stale, re-authenticating"` — there was nothing
+  to go stale.
+
+### Documentation
+
+- `docs/cli.md`: added `pc2 mcp` command, environment variables table,
+  stale-session recovery behavior, and exit code 5 (was missing — exit 5
+  shipped in v0.2.0 but only documented in the README).
+- `docs/api.md`: added a `run_authenticated()` section and a typed
+  exceptions reference table covering `EmpowerAuthError`,
+  `InteractiveAuthRequired`, `TwoFactorRequiredError`, `EmpowerAPIError`,
+  and `EmpowerNetworkError`.
+- `README.md`: softened session-lifetime claim from "1-2 days" to
+  "~24 hours, sometimes sooner" to reflect observed behavior; clarified
+  that exit 3 also covers HTTP 4xx/5xx from Empower.
+
 ## [0.2.1] — 2026-04-28
 
 ### Fixed

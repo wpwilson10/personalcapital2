@@ -42,6 +42,13 @@ def test_public_api_imports() -> None:
 # --- Test fixtures: configurable FakeClient ---
 
 
+class _FakeSession:
+    """Stand-in for requests.Session — only the cookies attribute matters."""
+
+    def __init__(self) -> None:
+        self.cookies: dict[str, str] = {}
+
+
 class _FakeClient:
     """Stand-in for EmpowerClient. Behavior driven by class-level recipe lists.
 
@@ -60,6 +67,11 @@ class _FakeClient:
         self.send_2fa_calls = 0
         self.verify_2fa_calls = 0
         self.save_session_calls = 0
+        # Mirror real EmpowerClient attributes so auth.py helpers that peek at
+        # session state don't AttributeError on the test double.
+        self._csrf: str = ""
+        self._session = _FakeSession()
+        self._loaded_from_disk = False
         type(self).instances.append(self)
 
     @classmethod
@@ -97,6 +109,10 @@ class _FakeClient:
         if target is not None:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("{}")
+
+    @property
+    def has_loaded_session(self) -> bool:
+        return self._loaded_from_disk
 
 
 @pytest.fixture(autouse=True)
@@ -507,3 +523,94 @@ def test_run_authenticated_cached_session_skips_short_circuit(
 
     assert run_authenticated(operation, session_path) == "ok"
     assert auth_calls["n"] == 0
+
+
+# --- 13. Stale vs unusable session log differentiation ---
+
+
+def test_has_loaded_session_false_for_blank_file(tmp_path: Path) -> None:
+    """A syntactically-valid but empty session file (no csrf, no cookies)
+    must report no cached state — recovery should log 'unusable', not 'stale'.
+    """
+    import json
+
+    from personalcapital2.client import EmpowerClient
+
+    session_path = tmp_path / "session.json"
+    session_path.write_text(json.dumps({"csrf": "", "cookies": {}}))
+    session_path.chmod(0o600)
+    client = EmpowerClient(session_path=session_path)
+    assert client.has_loaded_session is False
+
+
+def test_has_loaded_session_true_when_csrf_loaded(tmp_path: Path) -> None:
+    """A populated session file (csrf + cookies present) must report cached
+    state — recovery should log 'stale' on auth failure."""
+    import json
+
+    from personalcapital2.client import EmpowerClient
+
+    session_path = tmp_path / "session.json"
+    session_path.write_text(json.dumps({"csrf": "abc-123", "cookies": {"foo": "bar"}}))
+    session_path.chmod(0o600)
+    client = EmpowerClient(session_path=session_path)
+    assert client.has_loaded_session is True
+
+
+def test_has_loaded_session_is_a_snapshot_not_live_state(tmp_path: Path) -> None:
+    """has_loaded_session must reflect 'did we load state from disk', not
+    'are there cookies in the jar right now'.
+
+    Regression guard: a failed fetch() against Empower will populate the
+    session jar with server-set tracking cookies even when the request was
+    rejected. If has_loaded_session checks live cookies, a blank session
+    that triggered a single failed call will incorrectly report True after
+    that call, making run_authenticated log 'stale' instead of 'unusable'.
+    """
+    import json
+
+    from personalcapital2.client import EmpowerClient
+
+    session_path = tmp_path / "session.json"
+    session_path.write_text(json.dumps({"csrf": "", "cookies": {}}))
+    session_path.chmod(0o600)
+    client = EmpowerClient(session_path=session_path)
+    assert client.has_loaded_session is False
+
+    # Simulate cookies appearing later (server set them on a failed request).
+    # pyright sees cookielib's `.set()` return as partially unknown; we don't
+    # care about the return value here (fixture, not production code).
+    client._session.cookies.set("PC_SESSION", "tracking-cookie")  # pyright: ignore[reportUnknownMemberType]
+    assert client.has_loaded_session is False, (
+        "has_loaded_session must remain False after disk load failed, "
+        "even if cookies later appear from a network response"
+    )
+
+
+def test_run_authenticated_logs_unusable_for_blank_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_creds: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """End-to-end: when the cached client has no loaded state, the recovery
+    log line must say 'unusable', not 'stale' — there's nothing to go stale."""
+    import logging
+
+    session_path = tmp_path / "session.json"
+    session_path.write_text("{}")  # FakeClient defaults: _csrf="", cookies={}
+
+    _FakeClient.login_recipe = [None]
+
+    def operation(client: Any) -> str:
+        if not getattr(operation, "_called", False):
+            operation._called = True  # type: ignore[attr-defined]
+            raise EmpowerAuthError("Session not authenticated")
+        return "ok"
+
+    with caplog.at_level(logging.WARNING, logger="personalcapital2.auth"):
+        assert run_authenticated(operation, session_path) == "ok"
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("unusable" in m for m in messages), messages
+    assert not any("Session is stale" in m for m in messages), messages
