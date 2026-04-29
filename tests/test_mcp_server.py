@@ -16,7 +16,11 @@ import requests
 
 mcp_sdk = pytest.importorskip("mcp", reason="mcp extra not installed")
 
-from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError  # noqa: E402
+from personalcapital2.exceptions import (  # noqa: E402
+    EmpowerAPIError,
+    EmpowerAuthError,
+    EmpowerNetworkError,
+)
 from personalcapital2.mcp_server import (  # noqa: E402
     _apply_limit,
     _enforce_char_cap,
@@ -524,11 +528,23 @@ async def test_api_error_returns_message(server: Any, mock_client: MagicMock) ->
 
 
 async def test_network_error_returns_message(server: Any, mock_client: MagicMock) -> None:
-    """Network errors should return a readable message."""
+    """Defensive: an un-wrapped requests.RequestException still produces a readable message."""
     mock_client.get_holdings.side_effect = requests.ConnectionError("DNS resolution failed")
     text = await _call_tool(server, "get_holdings", mock_client=mock_client)
     assert "Error:" in text
     assert "Network request failed" in text
+
+
+async def test_empower_network_error_returns_message(server: Any, mock_client: MagicMock) -> None:
+    """EmpowerNetworkError (typed transport error from client._request) returns
+    an agent-friendly retry hint."""
+    mock_client.get_holdings.side_effect = EmpowerNetworkError(
+        "Request to https://pc-api.empower-retirement.com failed: connection refused"
+    )
+    text = await _call_tool(server, "get_holdings", mock_client=mock_client)
+    assert "Error:" in text
+    assert "Network request to Empower failed" in text
+    assert "Check connection and retry" in text
 
 
 # --- Date validation tests ---

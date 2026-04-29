@@ -42,7 +42,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from personalcapital2._serialization import serialize_result
 from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
-from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
+from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, EmpowerNetworkError
 
 log = logging.getLogger(__name__)
 
@@ -204,11 +204,17 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
                 "Session is expired or invalid. "
                 "The user needs to re-authenticate by running: pc2 login"
             )
+        except EmpowerNetworkError as exc:
+            log.warning("Network error in tool call: %s", exc)
+            return f"Error: Network request to Empower failed — {exc}. Check connection and retry."
         except EmpowerAPIError as exc:
             log.warning("API error in tool call: %s", exc)
             return f"Error: {exc}"
         except requests.RequestException as exc:
-            log.warning("Network error in tool call: %s", exc)
+            # Defensive fallback: client._request wraps these as EmpowerNetworkError,
+            # so this branch shouldn't fire in practice — kept in case a future code
+            # path bypasses _request().
+            log.warning("Unwrapped network error in tool call: %s", exc)
             return f"Error: Network request failed — {exc}"
 
     return wrapper

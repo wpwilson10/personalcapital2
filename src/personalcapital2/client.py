@@ -28,7 +28,12 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, TwoFactorRequiredError
+from personalcapital2.exceptions import (
+    EmpowerAPIError,
+    EmpowerAuthError,
+    EmpowerNetworkError,
+    TwoFactorRequiredError,
+)
 from personalcapital2.models import (
     AccountBalance,
     AccountBalancesResult,
@@ -434,10 +439,10 @@ class EmpowerClient:
         if data is not None:
             payload.update(data)
 
-        response = self._session.post(
+        response = self._request(
+            "POST",
             f"{API_URL}{endpoint}",
             data=payload,
-            timeout=self._timeout,
         )
         response.raise_for_status()
 
@@ -516,8 +521,19 @@ class EmpowerClient:
 
         try:
             data = json.loads(self._session_path.read_text())
-            self._csrf = data.get("csrf", "")
+            csrf = data.get("csrf", "")
             cookies = data.get("cookies", {})
+            if not csrf and not cookies:
+                # An empty/malformed session file silently produced an unauthenticated
+                # client that later failed with a confusing "Session is no longer valid".
+                # Surface the real cause now and skip populating in-memory state — the
+                # next save_session() will overwrite the file.
+                log.warning(
+                    "Session file %s is empty or malformed; ignoring (run `pc2 login` to refresh)",
+                    self._session_path,
+                )
+                return
+            self._csrf = csrf
             self._session.cookies = requests.utils.cookiejar_from_dict(cookies)  # type: ignore[no-untyped-call] — requests.utils is untyped
             log.info("Loaded session from %s", self._session_path)
         except (json.JSONDecodeError, KeyError, ValueError, AttributeError) as err:
@@ -541,9 +557,30 @@ class EmpowerClient:
         result: dict[str, Any] = raw  # type: ignore[reportUnknownVariableType] — validated by isinstance above
         return result
 
+    def _request(
+        self,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """Send an HTTP request, wrapping transport errors as EmpowerNetworkError.
+
+        Catches connection/timeout/DNS failures (RequestException) but lets
+        HTTPError propagate untouched. HTTPError is only raised by
+        raise_for_status(), never by .request() itself, so the explicit carve-out
+        is defensive — callers that need raise_for_status() or custom
+        status-code handling stay in control.
+        """
+        try:
+            return self._session.request(method, url, timeout=self._timeout, **kwargs)
+        except requests.HTTPError:
+            raise
+        except requests.RequestException as exc:
+            raise EmpowerNetworkError(f"Request to {url} failed: {exc}") from exc
+
     def _extract_csrf(self) -> str | None:
         """Fetch the login page and extract the CSRF token."""
-        response = self._session.get(LOGIN_PAGE, timeout=self._timeout)
+        response = self._request("GET", LOGIN_PAGE)
         match = CSRF_PATTERN.search(response.text)
         if match:
             return match.group(1)
@@ -563,10 +600,10 @@ class EmpowerClient:
             "referrerId": "",
         }
 
-        response = self._session.post(
+        response = self._request(
+            "POST",
             f"{API_URL}/login/identifyUser",
             data=data,
-            timeout=self._timeout,
         )
         if response.status_code >= 400:
             log.error("identifyUser returned HTTP %d", response.status_code)
@@ -603,10 +640,10 @@ class EmpowerClient:
         }
 
         try:
-            response = self._session.post(
+            response = self._request(
+                "POST",
                 f"{API_URL}/credential/authenticatePassword",
                 data=data,
-                timeout=self._timeout,
             )
         finally:
             # Clear password from the dict so it doesn't appear in tracebacks
@@ -653,10 +690,10 @@ class EmpowerClient:
             "bindDevice": "false",
             "csrf": self._csrf,
         }
-        response = self._session.post(
+        response = self._request(
+            "POST",
             f"{API_URL}{endpoints[mode]}",
             data=data,
-            timeout=self._timeout,
         )
         response.raise_for_status()
 
@@ -692,10 +729,10 @@ class EmpowerClient:
             "code": code,
             "csrf": self._csrf,
         }
-        response = self._session.post(
+        response = self._request(
+            "POST",
             f"{API_URL}{endpoints[mode]}",
             data=data,
-            timeout=self._timeout,
         )
         response.raise_for_status()
 

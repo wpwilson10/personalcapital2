@@ -16,6 +16,7 @@ import pytest
 from personalcapital2.cli import (
     EXIT_API,
     EXIT_AUTH,
+    EXIT_NETWORK,
     EXIT_USAGE,
     AgentArgumentParser,
     _parse_account_ids,
@@ -26,7 +27,11 @@ from personalcapital2.cli import (
     build_parser,
     main,
 )
-from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
+from personalcapital2.exceptions import (
+    EmpowerAPIError,
+    EmpowerAuthError,
+    EmpowerNetworkError,
+)
 from personalcapital2.models import (
     Account,
     AccountBalance,
@@ -563,7 +568,7 @@ def test_cmd_accounts_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
         summary=_sample_accounts_summary(),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -583,7 +588,7 @@ def test_cmd_accounts_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
         summary=_sample_accounts_summary(),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -604,7 +609,7 @@ def test_cmd_transactions_json(tmp_path: Path, capsys: pytest.CaptureFixture[str
         summary=_sample_transactions_summary(),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -635,7 +640,7 @@ def test_cmd_categories_json(tmp_path: Path, capsys: pytest.CaptureFixture[str])
         summary=_sample_transactions_summary(),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -670,7 +675,7 @@ def test_cmd_holdings_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     )
     result = HoldingsResult(holdings=(holding,), total_value=Decimal("12500"))
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -699,7 +704,7 @@ def test_cmd_net_worth_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     )
     result = NetWorthResult(entries=(nw,), summary=_sample_net_worth_summary())
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -715,7 +720,7 @@ def test_cmd_balances_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
     session = _create_session(tmp_path)
     bal = AccountBalance(date=date(2026, 3, 15), user_account_id=789, balance=Decimal("5432.10"))
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -745,7 +750,7 @@ def test_cmd_performance_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]
         account_summaries=(),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -780,7 +785,7 @@ def test_cmd_benchmarks_json(tmp_path: Path, capsys: pytest.CaptureFixture[str])
         account_summaries=(),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -819,7 +824,7 @@ def test_cmd_portfolio_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
         market_quotes=(),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -850,7 +855,7 @@ def test_cmd_snapshot_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
         market_quotes=(quote,),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -882,7 +887,7 @@ def test_cmd_snapshot_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
         market_quotes=(quote,),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -917,7 +922,7 @@ def test_cmd_spending_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
         details=(SpendingDetail(date=date(2026, 3, 1), amount=Decimal("516.88")),),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -946,7 +951,7 @@ def test_cmd_raw_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> Non
     session = _create_session(tmp_path)
     raw_response: dict[str, Any] = {"spHeader": {"success": True}, "spData": {"key": "value"}}
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -965,7 +970,7 @@ def test_cmd_raw_no_data(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     session = _create_session(tmp_path)
     raw_response: dict[str, Any] = {"spHeader": {"success": True}, "spData": {}}
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -979,13 +984,23 @@ def test_cmd_raw_no_data(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
 
 
 def test_auth_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Auth error during fetch + re-auth that also fails → EXIT_AUTH with the
+    re-auth's error surfaced (run_authenticated retries once before propagating)."""
     session = _create_session(tmp_path)
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with (
+        patch("personalcapital2.auth.EmpowerClient") as mock_cls,
+        patch("personalcapital2.auth.authenticate") as mock_auth,
+    ):
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
         instance.get_accounts.side_effect = EmpowerAuthError("Session expired")
+        # re-auth itself fails (e.g. no TTY in CI) — InteractiveAuthRequired is
+        # a subclass of EmpowerAuthError, propagates to main() unchanged.
+        from personalcapital2.exceptions import InteractiveAuthRequired
+
+        mock_auth.side_effect = InteractiveAuthRequired("Login requires an interactive terminal.")
         with pytest.raises(SystemExit) as exc_info:
             main(["--session", str(session), "accounts"])
 
@@ -993,14 +1008,14 @@ def test_auth_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     captured = capsys.readouterr()
     err = json.loads(captured.err)
     assert err["type"] == "EmpowerAuthError"
-    assert "Session expired" in err["error"]
+    assert "interactive terminal" in err["error"]
     assert err["suggestion"] == "pc2 login"
 
 
 def test_api_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = _create_session(tmp_path)
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -1015,15 +1030,32 @@ def test_api_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str])
 
 
 def test_no_session_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """No cached session + non-TTY environment → first fetch raises auth error
+    → run_authenticated calls authenticate() → mocked authenticate raises
+    InteractiveAuthRequired → structured JSON."""
+    from personalcapital2.exceptions import InteractiveAuthRequired
+
     session_path = tmp_path / "nonexistent.json"
 
-    with pytest.raises(SystemExit) as exc_info:
+    with (
+        # Mock EmpowerClient so the operation fails deterministically with an
+        # auth error (mimics the server returning "Session not authenticated"
+        # for a request with no cookies) — without this, run_authenticated would
+        # build a real client and hit the network.
+        patch("personalcapital2.auth.EmpowerClient") as mock_cls,
+        patch("personalcapital2.auth.authenticate") as mock_auth,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        instance = mock_cls.return_value
+        instance.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
+        mock_auth.side_effect = InteractiveAuthRequired("Login requires an interactive terminal.")
         main(["--session", str(session_path), "accounts"])
 
     assert exc_info.value.code == EXIT_AUTH
     captured = capsys.readouterr()
     err = json.loads(captured.err)
-    assert "No session found" in err["error"]
+    assert err["type"] == "EmpowerAuthError"
+    assert "interactive terminal" in err["error"]
     assert err["suggestion"] == "pc2 login"
 
 
@@ -1042,17 +1074,13 @@ def test_no_command_shows_help(capsys: pytest.CaptureFixture[str]) -> None:
 def test_cmd_login(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = tmp_path / "session.json"
 
-    with (
-        patch("personalcapital2.cli.authenticate") as mock_auth,
-        patch("personalcapital2.cli.sys.stdin") as mock_stdin,
-    ):
-        mock_stdin.isatty.return_value = True
+    with patch("personalcapital2.cli.authenticate") as mock_auth:
         mock_client = MagicMock()
         mock_auth.return_value = mock_client
         main(["--session", str(session), "login"])
 
+    # cmd_login delegates entirely to authenticate(), which saves at its tail.
     mock_auth.assert_called_once_with(session_path=session)
-    mock_client.save_session.assert_called_once_with(session)
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
     assert parsed["authenticated"] is True
@@ -1060,14 +1088,19 @@ def test_cmd_login(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_cmd_login_not_tty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Login fails immediately if stdin is not a TTY."""
+    """Non-TTY login: authenticate() raises InteractiveAuthRequired (subclass of
+    EmpowerAuthError) → main() emits structured JSON via _error()."""
+    from personalcapital2.exceptions import InteractiveAuthRequired
+
     session = tmp_path / "session.json"
 
     with (
-        patch("personalcapital2.cli.sys.stdin") as mock_stdin,
+        patch("personalcapital2.cli.authenticate") as mock_auth,
         pytest.raises(SystemExit) as exc_info,
     ):
-        mock_stdin.isatty.return_value = False
+        mock_auth.side_effect = InteractiveAuthRequired(
+            "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
+        )
         main(["--session", str(session), "login"])
 
     assert exc_info.value.code == EXIT_AUTH
@@ -1172,7 +1205,7 @@ def test_cmd_spending_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
         ),
     )
 
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -1228,7 +1261,7 @@ def test_validate_dates_reversed(capsys: pytest.CaptureFixture[str]) -> None:
 def test_cmd_transactions_reversed_dates(tmp_path: Path) -> None:
     """Reversed dates should exit before calling the API."""
     session = _create_session(tmp_path)
-    with patch("personalcapital2.cli.EmpowerClient") as mock_cls:
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
         instance = mock_cls.return_value
         instance._csrf = "test-csrf-token"
         instance.load_session = MagicMock()
@@ -1246,3 +1279,63 @@ def test_cmd_transactions_reversed_dates(tmp_path: Path) -> None:
             )
         assert exc_info.value.code == EXIT_USAGE
         instance.get_transactions.assert_not_called()
+
+
+# --- Network error and recovery (Task 10 additions) ---
+
+
+def test_network_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """EmpowerNetworkError surfaces as EXIT_NETWORK with structured JSON."""
+    session = _create_session(tmp_path)
+
+    with patch("personalcapital2.auth.EmpowerClient") as mock_cls:
+        instance = mock_cls.return_value
+        instance._csrf = "test-csrf-token"
+        instance.load_session = MagicMock()
+        instance.get_accounts.side_effect = EmpowerNetworkError(
+            "Request to https://x failed: connection refused"
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--session", str(session), "accounts"])
+
+    assert exc_info.value.code == EXIT_NETWORK
+    captured = capsys.readouterr()
+    err = json.loads(captured.err)
+    assert err["type"] == "EmpowerNetworkError"
+    assert "Network error reaching Empower" in err["error"]
+    assert "Check connection and retry" in err["error"]
+
+
+def test_data_command_recovers_from_stale_session(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End-to-end: first fetch raises EmpowerAuthError → run_authenticated calls
+    authenticate() → mocked authenticate returns a fresh client whose fetch
+    succeeds → command output is normal."""
+    session = _create_session(tmp_path)
+
+    stale_client = MagicMock()
+    stale_client._csrf = "stale"
+    stale_client.load_session = MagicMock()
+    stale_client.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
+
+    fresh_result = AccountsResult(
+        accounts=(_sample_account(),),
+        summary=_sample_accounts_summary(),
+    )
+    fresh_client = MagicMock()
+    fresh_client.get_accounts.return_value = fresh_result
+
+    with (
+        patch("personalcapital2.auth.EmpowerClient", return_value=stale_client),
+        patch("personalcapital2.auth.authenticate", return_value=fresh_client) as mock_auth,
+    ):
+        main(["--session", str(session), "accounts"])
+
+    mock_auth.assert_called_once()
+    # First call (stale) raised, second call (fresh) returned the result.
+    assert stale_client.get_accounts.call_count == 1
+    assert fresh_client.get_accounts.call_count == 1
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out)
+    assert parsed[0]["user_account_id"] == 100

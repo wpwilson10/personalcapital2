@@ -10,9 +10,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 import pytest
+import requests
 
 from personalcapital2.client import DEFAULT_USER_AGENT, EmpowerClient
-from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, TwoFactorRequiredError
+from personalcapital2.exceptions import (
+    EmpowerAPIError,
+    EmpowerAuthError,
+    EmpowerNetworkError,
+    TwoFactorRequiredError,
+)
 from personalcapital2.types import TwoFactorMode
 
 
@@ -39,7 +45,7 @@ def _mock_response(
 def test_extract_csrf_from_login_page() -> None:
     client = EmpowerClient()
     html = "<html><script>window.csrf='abc-123-def'</script></html>"
-    with patch.object(client._session, "get", return_value=_mock_response(text=html)):
+    with patch.object(client._session, "request", return_value=_mock_response(text=html)):
         csrf = client._extract_csrf()
     assert csrf == "abc-123-def"
 
@@ -47,7 +53,7 @@ def test_extract_csrf_from_login_page() -> None:
 def test_extract_csrf_returns_none_on_missing_pattern() -> None:
     client = EmpowerClient()
     html = "<html><body>No CSRF here</body></html>"
-    with patch.object(client._session, "get", return_value=_mock_response(text=html)):
+    with patch.object(client._session, "request", return_value=_mock_response(text=html)):
         csrf = client._extract_csrf()
     assert csrf is None
 
@@ -67,9 +73,8 @@ def test_login_success_with_remembered_session() -> None:
         }
     )
 
-    with (
-        patch.object(client._session, "get", return_value=csrf_page),
-        patch.object(client._session, "post", side_effect=[identify_resp, auth_resp]),
+    with patch.object(
+        client._session, "request", side_effect=[csrf_page, identify_resp, auth_resp]
     ):
         client.login("user@example.com", "password123")
 
@@ -84,8 +89,7 @@ def test_login_raises_2fa_when_not_remembered() -> None:
     )
 
     with (
-        patch.object(client._session, "get", return_value=csrf_page),
-        patch.object(client._session, "post", return_value=identify_resp),
+        patch.object(client._session, "request", side_effect=[csrf_page, identify_resp]),
         pytest.raises(TwoFactorRequiredError),
     ):
         client.login("user@example.com", "password123")
@@ -99,8 +103,7 @@ def test_login_raises_auth_error_on_none_auth_level() -> None:
     )
 
     with (
-        patch.object(client._session, "get", return_value=csrf_page),
-        patch.object(client._session, "post", return_value=identify_resp),
+        patch.object(client._session, "request", side_effect=[csrf_page, identify_resp]),
         pytest.raises(EmpowerAuthError, match="rate-limited"),
     ):
         client.login("user@example.com", "password123")
@@ -111,7 +114,7 @@ def test_login_raises_on_missing_csrf() -> None:
     csrf_page = _mock_response(text="<html>no csrf</html>")
 
     with (
-        patch.object(client._session, "get", return_value=csrf_page),
+        patch.object(client._session, "request", return_value=csrf_page),
         pytest.raises(EmpowerAuthError, match="CSRF"),
     ):
         client.login("user@example.com", "password123")
@@ -130,7 +133,7 @@ def test_authenticate_password_raises_on_non_authenticated_level() -> None:
     )
 
     with (
-        patch.object(client._session, "post", return_value=auth_resp),
+        patch.object(client._session, "request", return_value=auth_resp),
         pytest.raises(TwoFactorRequiredError),
     ):
         client._authenticate_password("password123")
@@ -146,7 +149,7 @@ def test_authenticate_password_raises_on_mfa_required() -> None:
     )
 
     with (
-        patch.object(client._session, "post", return_value=auth_resp),
+        patch.object(client._session, "request", return_value=auth_resp),
         pytest.raises(TwoFactorRequiredError),
     ):
         client._authenticate_password("password123")
@@ -163,7 +166,7 @@ def test_authenticate_password_success() -> None:
         }
     )
 
-    with patch.object(client._session, "post", return_value=auth_resp):
+    with patch.object(client._session, "request", return_value=auth_resp):
         client._authenticate_password("password123")
 
     assert client._csrf == "new-csrf"
@@ -179,7 +182,7 @@ def test_fetch_returns_data() -> None:
         json_data={"spHeader": {"success": True, "csrf": "rotated"}, "spData": {"accounts": []}}
     )
 
-    with patch.object(client._session, "post", return_value=api_resp):
+    with patch.object(client._session, "request", return_value=api_resp):
         result = client.fetch("/newaccount/getAccounts2")
 
     assert result["spData"]["accounts"] == []
@@ -196,7 +199,7 @@ def test_fetch_raises_on_api_failure() -> None:
     )
 
     with (
-        patch.object(client._session, "post", return_value=api_resp),
+        patch.object(client._session, "request", return_value=api_resp),
         pytest.raises(EmpowerAPIError, match="Rate limited"),
     ):
         client.fetch("/newaccount/getAccounts2")
@@ -214,7 +217,7 @@ def test_fetch_raises_auth_error_for_expired_session() -> None:
             }
         )
         with (
-            patch.object(client._session, "post", return_value=api_resp),
+            patch.object(client._session, "request", return_value=api_resp),
             pytest.raises(EmpowerAuthError, match=message),
         ):
             client.fetch("/test/endpoint")
@@ -235,7 +238,7 @@ def test_fetch_raises_auth_error_for_none_auth_level() -> None:
     )
 
     with (
-        patch.object(client._session, "post", return_value=api_resp),
+        patch.object(client._session, "request", return_value=api_resp),
         pytest.raises(EmpowerAuthError, match="Something unexpected"),
     ):
         client.fetch("/test/endpoint")
@@ -247,7 +250,7 @@ def test_fetch_raises_on_non_json_response() -> None:
     html_resp = _mock_response(text="<html>Login page</html>")
 
     with (
-        patch.object(client._session, "post", return_value=html_resp),
+        patch.object(client._session, "request", return_value=html_resp),
         pytest.raises(EmpowerAPIError, match="expected JSON"),
     ):
         client.fetch("/newaccount/getAccounts2")
@@ -291,6 +294,37 @@ def test_load_session_handles_corrupt_json(tmp_path: Path) -> None:
     assert client._csrf == ""
 
 
+def test_load_session_warns_on_empty_object(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An empty `{}` session file should warn instead of silently producing
+    an unauthenticated client."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text("{}")
+    session_path.chmod(0o600)
+
+    with caplog.at_level("WARNING", logger="personalcapital2.client"):
+        client = EmpowerClient(session_path=session_path)
+
+    assert client._csrf == ""
+    assert any("empty or malformed" in rec.message for rec in caplog.records)
+
+
+def test_load_session_warns_on_missing_keys(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A session file with explicitly empty csrf/cookies should also warn."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text(json.dumps({"csrf": "", "cookies": {}}))
+    session_path.chmod(0o600)
+
+    with caplog.at_level("WARNING", logger="personalcapital2.client"):
+        client = EmpowerClient(session_path=session_path)
+
+    assert client._csrf == ""
+    assert any("empty or malformed" in rec.message for rec in caplog.records)
+
+
 # --- 2FA flow ---
 
 
@@ -309,7 +343,7 @@ def test_2fa_sms_flow() -> None:
     )
 
     side_effects = [challenge_resp, verify_resp, auth_resp]
-    with patch.object(client._session, "post", side_effect=side_effects):
+    with patch.object(client._session, "request", side_effect=side_effects):
         client.send_2fa_challenge(TwoFactorMode.SMS)
         client.verify_2fa_and_login(TwoFactorMode.SMS, "123456", "password")
 
@@ -326,7 +360,7 @@ def test_2fa_challenge_failure_raises() -> None:
     )
 
     with (
-        patch.object(client._session, "post", return_value=challenge_resp),
+        patch.object(client._session, "request", return_value=challenge_resp),
         pytest.raises(EmpowerAuthError, match="Session no longer valid"),
     ):
         client.send_2fa_challenge(TwoFactorMode.EMAIL)
@@ -376,3 +410,41 @@ def test_is_auth_error_non_auth() -> None:
 
     assert _is_auth_error({"success": False}, "Rate limited") is False
     assert _is_auth_error({"authLevel": "SESSION_AUTHENTICATED"}, "Some error") is False
+
+
+# --- _request transport-error wrapping ---
+
+
+def test_request_wraps_connection_error() -> None:
+    """ConnectionError from requests should become EmpowerNetworkError."""
+    client = EmpowerClient()
+    with (
+        patch.object(
+            client._session, "request", side_effect=requests.ConnectionError("DNS lookup failed")
+        ),
+        pytest.raises(EmpowerNetworkError, match="DNS lookup failed"),
+    ):
+        client._request("GET", "https://example.invalid/")
+
+
+def test_request_wraps_timeout() -> None:
+    """Timeout from requests should become EmpowerNetworkError."""
+    client = EmpowerClient()
+    with (
+        patch.object(client._session, "request", side_effect=requests.Timeout("read timed out")),
+        pytest.raises(EmpowerNetworkError, match="read timed out"),
+    ):
+        client._request("POST", "https://example.invalid/")
+
+
+def test_request_lets_http_error_propagate() -> None:
+    """HTTPError (raised by raise_for_status, never by request itself) must NOT
+    be converted — _extract_csrf and _identify_user have bespoke status handling."""
+    client = EmpowerClient()
+    with (
+        patch.object(
+            client._session, "request", side_effect=requests.HTTPError("500 Server Error")
+        ),
+        pytest.raises(requests.HTTPError),
+    ):
+        client._request("GET", "https://example.invalid/")

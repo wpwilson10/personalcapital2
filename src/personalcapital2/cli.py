@@ -27,9 +27,13 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 from personalcapital2._serialization import json_default as _json_default
-from personalcapital2.auth import authenticate
-from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
-from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError
+from personalcapital2.auth import authenticate, run_authenticated
+from personalcapital2.client import DEFAULT_SESSION_PATH
+from personalcapital2.exceptions import (
+    EmpowerAPIError,
+    EmpowerAuthError,
+    EmpowerNetworkError,
+)
 
 _VERSION = _pkg_version("personalcapital2")
 
@@ -39,6 +43,7 @@ EXIT_AUTH = 1
 EXIT_USAGE = 2  # argparse default
 EXIT_API = 3
 EXIT_UNEXPECTED = 4
+EXIT_NETWORK = 5
 
 
 class AgentArgumentParser(argparse.ArgumentParser):
@@ -189,39 +194,18 @@ def _error(
     sys.exit(exit_code)
 
 
-def _make_client(session_path: Path) -> EmpowerClient:
-    """Create an EmpowerClient with session loaded.
-
-    If the session file doesn't exist, exits with an auth error.
-    If the session is stale/invalid, the first API call will raise
-    EmpowerAuthError or EmpowerAPIError, caught by main().
-    """
-    if not session_path.exists():
-        _error(
-            "No session found. Run: pc2 login",
-            "EmpowerAuthError",
-            EXIT_AUTH,
-            suggestion="pc2 login",
-        )
-    # Constructor auto-loads session when session_path is provided
-    return EmpowerClient(session_path=session_path)
-
-
 # --- Auth commands ---
 
 
 def cmd_login(args: argparse.Namespace) -> None:
-    """Authenticate interactively (2FA supported)."""
+    """Authenticate interactively (2FA supported).
+
+    Non-TTY environments raise InteractiveAuthRequired (subclass of
+    EmpowerAuthError) from authenticate() — handled by main() as a
+    structured-JSON error.
+    """
     session_path = Path(args.session)
-    if not sys.stdin.isatty():
-        _error(
-            "Login requires interactive terminal for 2FA. Run from a shell.",
-            "EmpowerAuthError",
-            EXIT_AUTH,
-            suggestion="Run 'pc2 login' from an interactive terminal",
-        )
-    client = authenticate(session_path=session_path)
-    client.save_session(session_path)
+    authenticate(session_path=session_path)
     result = {"session_path": str(session_path), "authenticated": True}
     sys.stdout.write(json.dumps(result) + "\n")
 
@@ -267,8 +251,7 @@ def cmd_accounts(args: argparse.Namespace) -> None:
     """List linked accounts."""
     session_path = Path(args.session)
     fmt: str = args.format
-    client = _make_client(session_path)
-    result = client.get_accounts()
+    result = run_authenticated(lambda c: c.get_accounts(), session_path)
     _output(result.accounts, fmt)
 
 
@@ -279,8 +262,7 @@ def cmd_transactions(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_transactions(start, end)
+    result = run_authenticated(lambda c: c.get_transactions(start, end), session_path)
     _output(result.transactions, fmt)
 
 
@@ -291,8 +273,7 @@ def cmd_categories(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_transactions(start, end)
+    result = run_authenticated(lambda c: c.get_transactions(start, end), session_path)
     _output(result.categories, fmt)
 
 
@@ -300,8 +281,7 @@ def cmd_holdings(args: argparse.Namespace) -> None:
     """Fetch current investment holdings."""
     session_path = Path(args.session)
     fmt: str = args.format
-    client = _make_client(session_path)
-    result = client.get_holdings()
+    result = run_authenticated(lambda c: c.get_holdings(), session_path)
     _output(result.holdings, fmt)
 
 
@@ -312,8 +292,7 @@ def cmd_net_worth(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_net_worth(start, end)
+    result = run_authenticated(lambda c: c.get_net_worth(start, end), session_path)
     _output(result.entries, fmt)
 
 
@@ -324,8 +303,7 @@ def cmd_balances(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_account_balances(start, end)
+    result = run_authenticated(lambda c: c.get_account_balances(start, end), session_path)
     _output(result.balances, fmt)
 
 
@@ -337,8 +315,7 @@ def cmd_spending(args: argparse.Namespace) -> None:
     end: date = args.end
     interval: str = args.interval
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_spending(start, end, interval)
+    result = run_authenticated(lambda c: c.get_spending(start, end, interval), session_path)
     _output(result.intervals, fmt)
 
 
@@ -350,8 +327,7 @@ def cmd_performance(args: argparse.Namespace) -> None:
     end: date = args.end
     account_ids: list[int] = args.account_ids
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_performance(start, end, account_ids)
+    result = run_authenticated(lambda c: c.get_performance(start, end, account_ids), session_path)
     _output(result.investments, fmt)
 
 
@@ -363,8 +339,7 @@ def cmd_benchmarks(args: argparse.Namespace) -> None:
     end: date = args.end
     account_ids: list[int] = args.account_ids
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_performance(start, end, account_ids)
+    result = run_authenticated(lambda c: c.get_performance(start, end, account_ids), session_path)
     _output(result.benchmarks, fmt)
 
 
@@ -375,8 +350,7 @@ def cmd_portfolio(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_quotes(start, end)
+    result = run_authenticated(lambda c: c.get_quotes(start, end), session_path)
     _output(result.portfolio_vs_benchmark, fmt)
 
 
@@ -387,8 +361,7 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    client = _make_client(session_path)
-    result = client.get_quotes(start, end)
+    result = run_authenticated(lambda c: c.get_quotes(start, end), session_path)
     if fmt == "csv":
         # CSV outputs the market quotes table (snapshot is a single summary row,
         # not useful as a standalone CSV — use JSON for the combined view)
@@ -421,7 +394,8 @@ def cmd_raw(args: argparse.Namespace) -> None:
     session_path = Path(args.session)
     endpoint: str = args.endpoint
     data_pairs: list[str] | None = args.data
-    client = _make_client(session_path)
+    # Parse --data key=value pairs BEFORE the authenticated call so the lambda
+    # only contains the idempotent fetch operation.
     data: dict[str, str] | None = None
     if data_pairs:
         data = {}
@@ -434,7 +408,7 @@ def cmd_raw(args: argparse.Namespace) -> None:
                 )
             key, _, value = pair.partition("=")
             data[key] = value
-    response = client.fetch(endpoint, data)
+    response = run_authenticated(lambda c: c.fetch(endpoint, data), session_path)
     sys.stdout.write(json.dumps(response, default=str, indent=2) + "\n")
 
 
@@ -496,6 +470,7 @@ exit codes:
   2  usage error (bad arguments, unknown command)
   3  API error (request failed, rate limited)
   4  unexpected error
+  5  network error (transport-level failure reaching Empower)
 
 examples:
   pc2 accounts                              list all linked accounts
@@ -776,6 +751,12 @@ def main(argv: list[str] | None = None) -> None:
         func(args)
     except EmpowerAuthError as e:
         _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion="pc2 login")
+    except EmpowerNetworkError as e:
+        _error(
+            f"Network error reaching Empower: {e}. Check connection and retry.",
+            "EmpowerNetworkError",
+            EXIT_NETWORK,
+        )
     except EmpowerAPIError as e:
         _error(str(e), "EmpowerAPIError", EXIT_API)
     except KeyboardInterrupt:

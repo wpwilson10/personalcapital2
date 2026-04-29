@@ -4,9 +4,15 @@ from importlib.metadata import version as _version
 
 __version__: str = _version("personalcapital2")
 
-from personalcapital2.auth import authenticate
+from personalcapital2.auth import authenticate, run_authenticated
 from personalcapital2.client import EmpowerClient
-from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, TwoFactorRequiredError
+from personalcapital2.exceptions import (
+    EmpowerAPIError,
+    EmpowerAuthError,
+    EmpowerNetworkError,
+    InteractiveAuthRequired,
+    TwoFactorRequiredError,
+)
 from personalcapital2.models import (
     Account,
     AccountBalance,
@@ -50,8 +56,10 @@ __all__ = [
     "EmpowerAPIError",
     "EmpowerAuthError",
     "EmpowerClient",
+    "EmpowerNetworkError",
     "Holding",
     "HoldingsResult",
+    "InteractiveAuthRequired",
     "InvestmentPerformance",
     "MarketQuote",
     "NetWorthEntry",
@@ -71,4 +79,5 @@ __all__ = [
     "TwoFactorRequiredError",
     "__version__",
     "authenticate",
+    "run_authenticated",
 ]

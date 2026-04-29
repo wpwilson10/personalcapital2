@@ -101,6 +101,21 @@ The server is token-aware — large responses are automatically truncated to fit
 
 The CLI and MCP server follow an [agent-first design](https://dev.to/uenyioha/writing-cli-tools-that-ai-agents-actually-want-to-use-39no): structured JSON errors with recovery suggestions, meaningful exit codes, self-documenting help text, and non-interactive TTY detection.
 
+CLI exit codes:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | success |
+| `1` | authentication error (no session, expired, 2FA required) |
+| `2` | usage error (bad arguments, unknown command) |
+| `3` | API error (request failed, rate limited) |
+| `4` | unexpected error |
+| `5` | network error (transport-level failure reaching Empower) |
+
+### Session recovery
+
+Stale cached sessions are handled automatically: if a data command finds the saved session expired, the CLI re-authenticates and retries the request once. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` to avoid a mid-command password prompt during recovery. Headless 2FA is not yet supported (tracked in [#5](https://github.com/wpwilson10/personalcapital2/issues/5)) — non-TTY environments will fail fast with a structured `EmpowerAuthError` rather than hanging on the prompt.
+
 ## Known API quirks
 
 This library uses Empower's unofficial internal web API, which is not affiliated with Empower and may change without notice.
