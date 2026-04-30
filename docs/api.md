@@ -112,6 +112,26 @@ The operation **must be idempotent** — it can run twice on the recovery path. 
 
 If `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` aren't set, recovery prompts for credentials interactively. Set them to avoid mid-command prompts in scripts. In non-TTY environments, recovery raises `InteractiveAuthRequired` instead of hanging.
 
+## Headless library use
+
+`authenticate()` is a TTY-friendly convenience wrapper. Library callers wanting full control over credential sourcing and 2FA pickup — for example, an agent that retrieves the verification code from an SMS provider or IMAP inbox — can skip `authenticate()` and call the lower-level `EmpowerClient` methods directly.
+
+```python
+from pathlib import Path
+from personalcapital2 import EmpowerClient, TwoFactorMode, TwoFactorRequiredError
+
+client = EmpowerClient(session_path=Path("session.json"))
+try:
+    client.login(email, password)
+except TwoFactorRequiredError:
+    client.send_2fa_challenge(TwoFactorMode.SMS)
+    code = fetch_code_from_my_sms_provider()  # caller's responsibility
+    client.verify_2fa_and_login(TwoFactorMode.SMS, code, password)
+client.save_session()
+```
+
+The three-step pattern — `login` → `send_2fa_challenge` → `verify_2fa_and_login` — mirrors what `authenticate()` does internally. Use it when you need to source the code from somewhere other than stdin.
+
 ## Exceptions
 
 All exceptions are exported from the package root.

@@ -36,6 +36,20 @@ def _prompt(message: str) -> str:
     return input()
 
 
+def parse_2fa_mode_env(value: str) -> TwoFactorMode:
+    """Parse a pre-normalized (lowercased, stripped) EMPOWER_2FA_MODE value.
+
+    Callers handle the empty == unset rule before reaching this function.
+    Raises ``EmpowerAuthError`` (NOT ``InteractiveAuthRequired``): bad config
+    is a distinct semantic from "no TTY available."
+    """
+    if value == "sms":
+        return TwoFactorMode.SMS
+    if value == "email":
+        return TwoFactorMode.EMAIL
+    raise EmpowerAuthError(f"Invalid EMPOWER_2FA_MODE={value!r}: must be 'sms' or 'email'")
+
+
 def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
     """Authenticate with Empower, handling 2FA interactively.
 
@@ -66,28 +80,43 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
             "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
         ) from None
 
+    # Tracks whether the cache-using login() call actually completed. Errors
+    # raised AFTER login succeeds (parse_2fa_mode_env, send_2fa_challenge,
+    # etc.) are not stale-cookie failures and must not trigger the retry.
+    login_succeeded = False
+
     def _login_and_maybe_challenge() -> tuple[EmpowerClient, TwoFactorMode | None]:
         """Run the cache-using portion. Returns (client, mode); mode is None if no 2FA needed."""
+        nonlocal login_succeeded
         client = EmpowerClient(session_path=session_path)
         try:
             client.login(email, password)
+        except TwoFactorRequiredError:
+            login_succeeded = True
+        else:
+            login_succeeded = True
             log.info("Logged in successfully")
             return client, None
-        except TwoFactorRequiredError:
-            pass
 
-        try:
-            print("\n2FA required. Choose method:", file=sys.stderr)
-            print("  1. SMS", file=sys.stderr)
-            print("  2. Email", file=sys.stderr)
-            choice = _prompt("Choice [1]: ").strip() or "1"
-        except EOFError:
-            raise InteractiveAuthRequired(
-                "2FA cannot complete without an interactive terminal. "
-                "See https://github.com/wpwilson10/personalcapital2/issues/5 "
-                "for headless support."
-            ) from None
-        mode = TwoFactorMode.SMS if choice == "1" else TwoFactorMode.EMAIL
+        # Read EMPOWER_2FA_MODE inside this branch (not eagerly) so an
+        # invalid value lying around in the environment doesn't break flows
+        # where the device is already remembered and 2FA isn't triggered.
+        env_mode = os.environ.get("EMPOWER_2FA_MODE", "").strip().lower()
+        if env_mode:
+            mode = parse_2fa_mode_env(env_mode)
+        else:
+            try:
+                print("\n2FA required. Choose method:", file=sys.stderr)
+                print("  1. SMS", file=sys.stderr)
+                print("  2. Email", file=sys.stderr)
+                choice = _prompt("Choice [1]: ").strip() or "1"
+            except EOFError:
+                raise InteractiveAuthRequired(
+                    "2FA mode prompt cannot complete without an interactive "
+                    "terminal. Set EMPOWER_2FA_MODE=sms or email and pipe the "
+                    "6-digit verification code on stdin for headless use."
+                ) from None
+            mode = TwoFactorMode.SMS if choice == "1" else TwoFactorMode.EMAIL
         client.send_2fa_challenge(mode)
         return client, mode
 
@@ -99,8 +128,10 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
         raise
     except EmpowerAuthError:
         # Stale cached cookies. Clear and retry once with a fresh client.
-        # Only retry if we had a session file — otherwise it's a real auth failure.
-        if not session_path.exists():
+        # Only retry if we had a session file AND the failure was during the
+        # cache-using login() call — config/2FA-dispatch errors after a
+        # successful login don't indicate stale cookies.
+        if login_succeeded or not session_path.exists():
             raise
         log.warning("Cached session appears stale, retrying with fresh client")
         session_path.unlink(missing_ok=True)  # race-safe

@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-04-29
+
+### Added
+
+- **`EMPOWER_2FA_MODE` environment variable** — `sms` or `email` (case-insensitive)
+  skips the interactive 2FA-method prompt in `pc2 login` and stale-session
+  recovery. Read lazily — only consulted when the server actually requires
+  2FA, so a leftover value doesn't break flows where the device is remembered.
+  Empty/whitespace is treated as unset; an invalid value raises
+  `EmpowerAuthError`. Combined with stdin-piped verification codes, this makes
+  fully headless invocation possible:
+  ```bash
+  EMPOWER_EMAIL=... EMPOWER_PASSWORD=... EMPOWER_2FA_MODE=sms \
+      printf '%s\n' "$CODE" | pc2 login
+  ```
+- **`start_authentication` and `complete_authentication` MCP tools** — when
+  the cached session expires mid-conversation, the agent recovers in chat:
+  `start_authentication` reads credentials from the MCP server's env block
+  and dispatches the 2FA challenge; `complete_authentication` submits the
+  6-digit code. No terminal context-switch required.
+- **`docs/api.md` "Headless library use" section** — concrete example showing
+  direct `client.login` / `send_2fa_challenge` / `verify_2fa_and_login` usage
+  for library callers wanting full control over credential sourcing and 2FA
+  pickup.
+
+### Changed
+
+- **`pc2 mcp` no longer fails to start when no session file exists.** The
+  lifespan now logs a warning and starts with an unauthenticated client, so
+  agents can bootstrap by calling `start_authentication`. Data tools called
+  before authentication return an error string directing the agent at the
+  new auth tools.
+- **`EmpowerAuthError` tool message updated** to reference
+  `start_authentication` / `complete_authentication` instead of `pc2 login`.
+
+Closes [#5](https://github.com/wpwilson10/personalcapital2/issues/5).
+
 ## [0.2.2] — 2026-04-28
 
 ### Added

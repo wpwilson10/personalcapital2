@@ -4,7 +4,8 @@ Exposes EmpowerClient methods as MCP tools over stdio transport.
 Requires the ``mcp`` optional extra: ``pip install personalcapital2[mcp]``
 
 Usage:
-    pc2 mcp              # start server (requires prior: pc2 login)
+    pc2 mcp              # start server (cold start OK — agent can bootstrap
+                         # via start_authentication if no session is cached)
 
 Client config (Claude Code / Claude Desktop):
     {
@@ -13,7 +14,12 @@ Client config (Claude Code / Claude Desktop):
                 "type": "stdio",
                 "command": "pc2",
                 "args": ["mcp"],
-                "env": {"PC2_SESSION_PATH": "~/.config/personalcapital2/session.json"}
+                "env": {
+                    "PC2_SESSION_PATH": "~/.config/personalcapital2/session.json",
+                    "EMPOWER_EMAIL": "you@example.com",
+                    "EMPOWER_PASSWORD": "...",
+                    "EMPOWER_2FA_MODE": "sms"
+                }
             }
         }
     }
@@ -38,11 +44,19 @@ import requests
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from personalcapital2.types import TwoFactorMode
 from mcp.server.fastmcp import Context, FastMCP
 
 from personalcapital2._serialization import serialize_result
+from personalcapital2.auth import parse_2fa_mode_env
 from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
-from personalcapital2.exceptions import EmpowerAPIError, EmpowerAuthError, EmpowerNetworkError
+from personalcapital2.exceptions import (
+    EmpowerAPIError,
+    EmpowerAuthError,
+    EmpowerNetworkError,
+    TwoFactorRequiredError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -54,16 +68,26 @@ class _AppContext:
     """Lifespan state shared across all tool invocations."""
 
     client: EmpowerClient
+    session_path: Path
+    pending_2fa_mode: TwoFactorMode | None = None
 
 
 def _get_client(ctx: Context) -> EmpowerClient:
     """Extract the EmpowerClient from the MCP context.
 
     Reloads the session from disk on each call so the long-running server
-    picks up fresh sessions after the user re-authenticates with ``pc2 login``.
+    picks up fresh sessions after re-authentication — whether via
+    ``pc2 login`` from another terminal or via ``start_authentication`` /
+    ``complete_authentication`` MCP tools.
+
+    Skips the reload during a 2FA window: ``load_session()`` replaces
+    ``self._session.cookies`` (not merge), which would clobber the in-memory
+    challenge cookies that ``complete_authentication`` needs to verify
+    against — leaving the agent with a mysterious verification failure.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
-    app_ctx.client.load_session()
+    if app_ctx.pending_2fa_mode is None:
+        app_ctx.client.load_session()
     return app_ctx.client
 
 
@@ -201,8 +225,9 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
             log.warning("Auth error in tool call: %s", exc)
             return (
                 f"Error: {exc}\n\n"
-                "Session is expired or invalid. "
-                "The user needs to re-authenticate by running: pc2 login"
+                "Session is expired or invalid. Call start_authentication to "
+                "begin re-auth, then complete_authentication with the 6-digit "
+                "code if 2FA is required."
             )
         except EmpowerNetworkError as exc:
             log.warning("Network error in tool call: %s", exc)
@@ -220,6 +245,117 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
     return wrapper
 
 
+def start_authentication(ctx: Context) -> str:
+    """Re-authenticate when the cached session is stale.
+
+    Reads EMPOWER_EMAIL, EMPOWER_PASSWORD, and (if 2FA required)
+    EMPOWER_2FA_MODE from the MCP server's environment. If the device
+    is remembered, completes authentication directly. Otherwise dispatches
+    a 2FA challenge via SMS or email; call complete_authentication next
+    with the 6-digit code.
+
+    Each call that hits the 2FA branch dispatches a fresh SMS or email —
+    call sparingly to avoid spamming the user. State is process-local;
+    if the MCP server restarts mid-flow, call this again to begin a new
+    challenge.
+    """
+    app_ctx: _AppContext = ctx.request_context.lifespan_context
+    email = os.getenv("EMPOWER_EMAIL")
+    password = os.getenv("EMPOWER_PASSWORD")
+    if not email or not password:
+        return (
+            "Error: EMPOWER_EMAIL and/or EMPOWER_PASSWORD not set. "
+            "Add them to the 'env' block of your MCP server config "
+            "and restart the MCP server."
+        )
+
+    # Mint a fresh client per attempt (mirrors authenticate() at auth.py).
+    # Stale cookies on the lifespan client could confuse client.login().
+    # Only commit fresh_client to app_ctx on success — failure leaves the
+    # existing client untouched so transient errors don't lose state.
+    fresh_client = EmpowerClient(session_path=app_ctx.session_path)
+    try:
+        fresh_client.login(email, password)
+    except TwoFactorRequiredError:
+        env_mode = os.getenv("EMPOWER_2FA_MODE", "").strip().lower()
+        if not env_mode:
+            return (
+                "Error: 2FA required but EMPOWER_2FA_MODE not set. "
+                "Add EMPOWER_2FA_MODE='sms' or 'email' to the env block "
+                "and restart."
+            )
+        try:
+            mode = parse_2fa_mode_env(env_mode)
+        except EmpowerAuthError as exc:
+            return f"Error: {exc}"
+        try:
+            fresh_client.send_2fa_challenge(mode)
+        except EmpowerNetworkError as exc:
+            return (
+                f"Error: network failure dispatching 2FA challenge — {exc}. "
+                "Check connection and try again."
+            )
+        except (EmpowerAuthError, EmpowerAPIError) as exc:
+            return f"Error: 2FA challenge dispatch failed: {exc}"
+        # Commit the partial-auth-state client so complete_authentication
+        # can verify against the same cookies the challenge was issued on.
+        app_ctx.client = fresh_client
+        app_ctx.pending_2fa_mode = mode
+        return (
+            f"2FA challenge sent via {mode.value}. "
+            "Call complete_authentication with the 6-digit code."
+        )
+    except EmpowerNetworkError as exc:
+        return f"Error: network failure during login — {exc}. Check connection and try again."
+    except (EmpowerAuthError, EmpowerAPIError) as exc:
+        return f"Error: authentication failed: {exc}"
+
+    # No-2FA path: device remembered, login completed directly.
+    # Clear pending_2fa_mode in case a prior start_authentication call set
+    # it (e.g. user retried after partial 2FA flow and device is now
+    # remembered).
+    fresh_client.save_session()
+    app_ctx.client = fresh_client
+    app_ctx.pending_2fa_mode = None
+    return "Authenticated."
+
+
+def complete_authentication(ctx: Context, code: str) -> str:
+    """Submit the 6-digit 2FA code to complete authentication.
+
+    Call this after start_authentication has dispatched a 2FA challenge.
+    Pass the 6-digit code that was sent to the user's phone or email.
+    """
+    app_ctx: _AppContext = ctx.request_context.lifespan_context
+    if app_ctx.pending_2fa_mode is None:
+        return "Error: no pending 2FA challenge. Call start_authentication first."
+    password = os.getenv("EMPOWER_PASSWORD")
+    if not password:
+        return (
+            "Error: EMPOWER_PASSWORD no longer set. "
+            "Restart the MCP server with the env var set and try again."
+        )
+    mode = app_ctx.pending_2fa_mode
+    try:
+        app_ctx.client.verify_2fa_and_login(mode, code, password)
+    except EmpowerNetworkError as exc:
+        # Don't clear pending_2fa_mode — the code may still be valid;
+        # the agent can retry complete_authentication once connectivity
+        # recovers without dispatching a fresh challenge.
+        return (
+            f"Error: network failure during 2FA verification — {exc}. "
+            "Try complete_authentication again."
+        )
+    except (EmpowerAuthError, EmpowerAPIError) as exc:
+        # Wrong code or server rejection — clear state so the agent can
+        # restart cleanly via start_authentication.
+        app_ctx.pending_2fa_mode = None
+        return f"Error: 2FA verification failed: {exc}"
+    app_ctx.pending_2fa_mode = None
+    app_ctx.client.save_session()
+    return "Authenticated."
+
+
 def create_server(session_path: Path | None = None) -> FastMCP:
     """Create and return a configured MCP server.
 
@@ -230,19 +366,39 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
     @asynccontextmanager
     async def lifespan(server: FastMCP) -> AsyncIterator[_AppContext]:
+        # No-session is OK at startup — agents bootstrap via start_authentication.
+        # EmpowerClient's constructor calls load_session() which is a no-op for
+        # missing files (client.py:522), so the unauthenticated client is safe
+        # to construct here; tool calls return auth errors directing the agent
+        # at start_authentication.
         if not resolved_path.exists():
-            # EmpowerAuthError (not FileNotFoundError) so the CLI's typed handler
-            # chain maps it to EXIT_AUTH=1 with a "pc2 login" suggestion.
-            raise EmpowerAuthError(
-                f"No session file at {resolved_path}. Authenticate first by running: pc2 login"
+            log.warning(
+                "No session file at %s; agent must call start_authentication "
+                "before data tools work.",
+                resolved_path,
             )
         client = EmpowerClient(session_path=resolved_path)
-        yield _AppContext(client=client)
+        yield _AppContext(client=client, session_path=resolved_path)
 
     mcp = FastMCP(
         name="empower",
         lifespan=lifespan,
     )
+
+    # --- Authentication tools ---
+    #
+    # Two tools (not one stateful tool) for LLM ergonomics: each has a single
+    # clear purpose. State (pending_2fa_mode) lives on _AppContext so the
+    # 6-digit code can be collected from the user mid-conversation.
+    #
+    # These deliberately do NOT use @_handle_tool_errors — that decorator
+    # would direct callers BACK to start_authentication on EmpowerAuthError,
+    # producing a self-referential error loop. Errors are handled inline
+    # inside the module-level start_authentication / complete_authentication
+    # implementations.
+
+    mcp.tool(structured_output=False)(start_authentication)
+    mcp.tool(structured_output=False)(complete_authentication)
 
     # --- Tools ---
     #
@@ -261,7 +417,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         with net worth, total assets, and total liabilities.
         No parameters required.
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`).
+        Errors: returns an error message if the session is expired — call
+        start_authentication to begin re-auth, then complete_authentication
+        with the 6-digit code if 2FA is required.
         """
         client = _get_client(ctx)
         result = client.get_accounts()
@@ -283,8 +441,10 @@ def create_server(session_path: Path | None = None) -> FastMCP:
                 Use a smaller value for quick lookups or a larger value when
                 you need more detail. Summary is always complete.
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`)
-        or if start_date is after end_date.
+        Errors: returns an error message if start_date is after end_date,
+        or if the session is expired — in which case call start_authentication
+        to begin re-auth, then complete_authentication with the 6-digit code
+        if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
             return err
@@ -309,7 +469,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
                 Use a smaller value for quick lookups or a larger value when
                 you need more detail. Total value is always complete.
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`).
+        Errors: returns an error message if the session is expired — call
+        start_authentication to begin re-auth, then complete_authentication
+        with the 6-digit code if 2FA is required.
         """
         if limit < 1:
             return "Error: limit must be at least 1."
@@ -335,8 +497,10 @@ def create_server(session_path: Path | None = None) -> FastMCP:
                 Use a smaller value for quick lookups or a larger value when
                 you need more detail. Summary is always complete.
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`)
-        or if start_date is after end_date.
+        Errors: returns an error message if start_date is after end_date,
+        or if the session is expired — in which case call start_authentication
+        to begin re-auth, then complete_authentication with the 6-digit code
+        if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
             return err
@@ -366,8 +530,10 @@ def create_server(session_path: Path | None = None) -> FastMCP:
                 Use a smaller value for quick lookups or a larger value when
                 you need more detail. Summary is always complete.
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`)
-        or if start_date is after end_date.
+        Errors: returns an error message if start_date is after end_date,
+        or if the session is expired — in which case call start_authentication
+        to begin re-auth, then complete_authentication with the 6-digit code
+        if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
             return err
@@ -407,8 +573,10 @@ def create_server(session_path: Path | None = None) -> FastMCP:
                 and benchmarks lists (default 500). Account summaries are always
                 complete. Use a smaller value for quick lookups.
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`)
-        or if start_date is after end_date.
+        Errors: returns an error message if start_date is after end_date,
+        or if the session is expired — in which case call start_authentication
+        to begin re-auth, then complete_authentication with the 6-digit code
+        if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
             return err
@@ -433,8 +601,10 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`)
-        or if start_date is after end_date.
+        Errors: returns an error message if start_date is after end_date,
+        or if the session is expired — in which case call start_authentication
+        to begin re-auth, then complete_authentication with the 6-digit code
+        if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
             return err
@@ -465,7 +635,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
             interval: Sent to API but has no observable effect — all three intervals
                 are always returned. Defaults to MONTH.
 
-        Errors: returns an error message if the session is expired (re-run `pc2 login`).
+        Errors: returns an error message if the session is expired — call
+        start_authentication to begin re-auth, then complete_authentication
+        with the 6-digit code if 2FA is required.
         """
         today = date.today()
         effective_start = start_date or today

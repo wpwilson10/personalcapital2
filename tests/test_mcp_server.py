@@ -20,6 +20,7 @@ from personalcapital2.exceptions import (  # noqa: E402
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    TwoFactorRequiredError,
 )
 from personalcapital2.mcp_server import (  # noqa: E402
     _apply_limit,
@@ -511,7 +512,20 @@ async def test_auth_error_returns_message(server: Any, mock_client: MagicMock) -
     text = await _call_tool(server, "get_accounts", mock_client=mock_client)
     assert "Error:" in text
     assert "Session expired" in text
-    assert "pc2 login" in text
+
+
+async def test_handle_tool_errors_auth_branch_directs_to_mcp_tools(
+    server: Any, mock_client: MagicMock
+) -> None:
+    """The wrapped auth-error message must direct agents at start_authentication
+    and complete_authentication, NOT 'pc2 login'. Pins the public message
+    contract for every data tool wrapped by _handle_tool_errors.
+    """
+    mock_client.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
+    text = await _call_tool(server, "get_accounts", mock_client=mock_client)
+    assert "start_authentication" in text
+    assert "complete_authentication" in text
+    assert "pc2 login" not in text
 
 
 async def test_api_error_returns_message(server: Any, mock_client: MagicMock) -> None:
@@ -581,32 +595,53 @@ async def test_reversed_dates_return_error(server: Any, mock_client: MagicMock) 
 # --- Server lifecycle tests ---
 
 
-async def test_missing_session_file(tmp_path: Path) -> None:
-    """Server should raise EmpowerAuthError (wrapped in ExceptionGroup by
-    anyio) when the session file is missing — so the CLI's typed-handler
-    chain maps it to EXIT_AUTH=1 with the 'pc2 login' suggestion after
-    the singleton-group unwrap."""
-    from personalcapital2.exceptions import EmpowerAuthError
+async def test_missing_session_file_starts_with_warning(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cold start with no session file: server starts (so the agent can call
+    start_authentication to bootstrap) and logs a warning."""
+    import logging
 
     missing = tmp_path / "nonexistent.json"
     srv = create_server(session_path=missing)
 
     from mcp.shared.memory import create_connected_server_and_client_session
 
-    with pytest.raises(BaseException) as exc_info:
+    with caplog.at_level(logging.WARNING, logger="personalcapital2.mcp_server"):
         async with create_connected_server_and_client_session(srv._mcp_server):
             pass
 
-    # anyio TaskGroup wraps the lifespan exception in BaseExceptionGroup.
-    # Walk down singleton groups to find the real cause.
-    cause: BaseException = exc_info.value
-    while isinstance(cause, BaseExceptionGroup) and len(cause.exceptions) == 1:
-        cause = cause.exceptions[0]
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("No session file" in m and "start_authentication" in m for m in messages), messages
 
-    assert isinstance(cause, EmpowerAuthError), (
-        f"missing session must raise EmpowerAuthError, got {type(cause).__name__}: {cause}"
-    )
-    assert "No session file" in str(cause)
+
+async def test_missing_session_file_data_tool_directs_agent_to_start_authentication(
+    tmp_path: Path,
+) -> None:
+    """When the cached session is missing, a data tool call must return an
+    error string mentioning start_authentication (not 'pc2 login') — pins the
+    _handle_tool_errors message contract for the cold-start path."""
+    missing = tmp_path / "nonexistent.json"
+    srv = create_server(session_path=missing)
+
+    # Real EmpowerClient against a missing session — get_accounts will hit
+    # the API and fail with EmpowerAuthError, which _handle_tool_errors then
+    # rewrites to the agent-friendly message.
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    fake_client = MagicMock()
+    fake_client.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
+
+    with patch("personalcapital2.mcp_server.EmpowerClient", return_value=fake_client):
+        async with create_connected_server_and_client_session(srv._mcp_server) as session:
+            result = await session.call_tool("get_accounts", {})
+
+    assert len(result.content) > 0
+    text = result.content[0].text  # type: ignore[union-attr]  # text content has .text
+    assert "start_authentication" in text
+    assert "complete_authentication" in text
+    assert "pc2 login" not in text
 
 
 # --- Tool registration tests ---
@@ -626,11 +661,12 @@ async def test_tools_have_no_annotations(server: Any) -> None:
         assert tool.annotations is None, f"Tool {tool.name} has annotations set"
 
 
-async def test_all_eight_tools_registered(server: Any) -> None:
-    """Verify all 8 tools are registered."""
+async def test_all_tools_registered(server: Any) -> None:
+    """Verify all data + auth tools are registered."""
     tools = await server.list_tools()
     names = {t.name for t in tools}
     expected = {
+        # Data tools
         "get_accounts",
         "get_transactions",
         "get_holdings",
@@ -639,6 +675,9 @@ async def test_all_eight_tools_registered(server: Any) -> None:
         "get_performance",
         "get_quotes",
         "get_spending",
+        # Authentication tools
+        "start_authentication",
+        "complete_authentication",
     }
     assert names == expected
 
@@ -1229,3 +1268,311 @@ async def test_holdings_zero_limit(server: Any, mock_client: MagicMock) -> None:
     assert "Error:" in text
     assert "limit must be at least 1" in text
     mock_client.get_holdings.assert_not_called()
+
+
+# --- Authentication tools (start_authentication / complete_authentication) ---
+#
+# Tests call the module-level tool functions directly with a mock Context, so
+# we can inspect _AppContext state (pending_2fa_mode, client identity) after
+# each call. Going through MCP transport would obscure those assertions.
+
+
+from typing import ClassVar  # noqa: E402
+
+from personalcapital2.mcp_server import (  # noqa: E402
+    _AppContext,
+    _get_client,
+    complete_authentication,
+    start_authentication,
+)
+from personalcapital2.types import TwoFactorMode as _TwoFactorMode  # noqa: E402
+
+
+class _FakeAuthClient:
+    """Stand-in for EmpowerClient for auth-tool tests.
+
+    Each method's behavior is driven by class-level recipe lists (popped in
+    order). Instance counters expose what was called for assertions.
+    """
+
+    instances: ClassVar[list[_FakeAuthClient]] = []
+    login_recipe: ClassVar[list[BaseException | None]] = []
+    send_2fa_recipe: ClassVar[list[BaseException | None]] = []
+    verify_2fa_recipe: ClassVar[list[BaseException | None]] = []
+
+    def __init__(self, session_path: Path | None = None) -> None:
+        self.session_path = session_path
+        self.login_calls = 0
+        self.send_2fa_calls = 0
+        self.send_2fa_modes: list[_TwoFactorMode] = []
+        self.verify_2fa_calls = 0
+        self.save_session_calls = 0
+        self.load_session_calls = 0
+        type(self).instances.append(self)
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.instances = []
+        cls.login_recipe = []
+        cls.send_2fa_recipe = []
+        cls.verify_2fa_recipe = []
+
+    @classmethod
+    def _next(cls, recipe: list[BaseException | None]) -> BaseException | None:
+        return recipe.pop(0) if recipe else None
+
+    def login(self, email: str, password: str) -> None:
+        self.login_calls += 1
+        err = type(self)._next(type(self).login_recipe)
+        if err is not None:
+            raise err
+
+    def send_2fa_challenge(self, mode: _TwoFactorMode) -> None:
+        self.send_2fa_calls += 1
+        self.send_2fa_modes.append(mode)
+        err = type(self)._next(type(self).send_2fa_recipe)
+        if err is not None:
+            raise err
+
+    def verify_2fa_and_login(self, mode: _TwoFactorMode, code: str, password: str) -> None:
+        self.verify_2fa_calls += 1
+        err = type(self)._next(type(self).verify_2fa_recipe)
+        if err is not None:
+            raise err
+
+    def save_session(self, path: Path | None = None) -> None:
+        self.save_session_calls += 1
+
+    def load_session(self) -> None:
+        self.load_session_calls += 1
+
+
+def _make_ctx(app_ctx: _AppContext) -> Any:
+    """Build a minimal mock Context whose request_context.lifespan_context
+    points at the test's _AppContext.
+    """
+    ctx = MagicMock()
+    ctx.request_context.lifespan_context = app_ctx
+    return ctx
+
+
+@pytest.fixture
+def auth_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EMPOWER_EMAIL", "user@example.com")
+    monkeypatch.setenv("EMPOWER_PASSWORD", "secret")
+
+
+@pytest.fixture
+def patch_auth_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace mcp_server.EmpowerClient with the auth-test fake. The fake is
+    constructed by start_authentication via EmpowerClient(session_path=...).
+    """
+    _FakeAuthClient.reset()
+    monkeypatch.setattr("personalcapital2.mcp_server.EmpowerClient", _FakeAuthClient)
+
+
+def _make_app_ctx(tmp_path: Path) -> _AppContext:
+    """Build an _AppContext with a sentinel client that tests can assert on
+    (e.g. 'app_ctx.client is not original_client' after a successful auth)."""
+    sentinel_client = _FakeAuthClient(session_path=tmp_path / "session.json")
+    # Reset instances after the sentinel so test assertions see only the
+    # clients spawned by start_authentication.
+    _FakeAuthClient.instances = []
+    return _AppContext(client=sentinel_client, session_path=tmp_path / "session.json")  # type: ignore[arg-type]
+
+
+def test_start_authentication_no_2fa_required(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    app_ctx = _make_app_ctx(tmp_path)
+    _FakeAuthClient.login_recipe = [None]  # device remembered, no 2FA
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert result == "Authenticated."
+    assert app_ctx.pending_2fa_mode is None
+    fresh = _FakeAuthClient.instances[0]
+    assert fresh.login_calls == 1
+    assert fresh.send_2fa_calls == 0
+    assert fresh.save_session_calls == 1
+
+
+def test_start_authentication_2fa_required(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    monkeypatch.setenv("EMPOWER_2FA_MODE", "sms")
+    app_ctx = _make_app_ctx(tmp_path)
+    _FakeAuthClient.login_recipe = [TwoFactorRequiredError()]
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert "complete_authentication" in result
+    assert "SMS" in result
+    assert app_ctx.pending_2fa_mode is _TwoFactorMode.SMS
+    fresh = _FakeAuthClient.instances[0]
+    assert fresh.send_2fa_modes == [_TwoFactorMode.SMS]
+    assert fresh.save_session_calls == 0  # don't save partial-auth state
+
+
+def test_start_authentication_missing_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    patch_auth_client: None,
+) -> None:
+    monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
+    monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
+    app_ctx = _make_app_ctx(tmp_path)
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert "EMPOWER_EMAIL" in result
+    assert "EMPOWER_PASSWORD" in result
+    assert "env" in result.lower()
+    # No fresh client constructed when credentials are missing.
+    assert _FakeAuthClient.instances == []
+
+
+def test_start_authentication_2fa_required_but_mode_unset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    monkeypatch.delenv("EMPOWER_2FA_MODE", raising=False)
+    app_ctx = _make_app_ctx(tmp_path)
+    _FakeAuthClient.login_recipe = [TwoFactorRequiredError()]
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert "EMPOWER_2FA_MODE" in result
+    assert app_ctx.pending_2fa_mode is None
+    fresh = _FakeAuthClient.instances[0]
+    assert fresh.send_2fa_calls == 0
+
+
+def test_complete_authentication_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    """Pre-set pending_2fa_mode (simulating prior start_authentication) then
+    verify the code.
+    """
+    fresh_client = _FakeAuthClient(session_path=tmp_path / "session.json")
+    _FakeAuthClient.instances = []  # clear so test assertions see only post-setup
+    app_ctx = _AppContext(
+        client=fresh_client,  # type: ignore[arg-type]
+        session_path=tmp_path / "session.json",
+        pending_2fa_mode=_TwoFactorMode.SMS,
+    )
+
+    result = complete_authentication(_make_ctx(app_ctx), code="123456")
+
+    assert result == "Authenticated."
+    assert app_ctx.pending_2fa_mode is None
+    assert fresh_client.verify_2fa_calls == 1
+    assert fresh_client.save_session_calls == 1
+
+
+def test_complete_authentication_no_pending_challenge(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    app_ctx = _make_app_ctx(tmp_path)
+    assert app_ctx.pending_2fa_mode is None  # precondition
+
+    result = complete_authentication(_make_ctx(app_ctx), code="123456")
+
+    assert "no pending 2FA challenge" in result
+    assert "start_authentication" in result
+    # No verify call happened.
+    assert app_ctx.client.verify_2fa_calls == 0  # type: ignore[attr-defined]
+
+
+def test_start_authentication_replaces_client_on_success(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    """Pin the fresh-client contract: a successful auth replaces app_ctx.client
+    with the fresh instance. Without this guard, a future 'reuse the existing
+    client' simplification could silently regress stale-cookie isolation."""
+    app_ctx = _make_app_ctx(tmp_path)
+    original_client = app_ctx.client
+    _FakeAuthClient.login_recipe = [None]
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert result == "Authenticated."
+    assert app_ctx.client is not original_client
+    assert app_ctx.client is _FakeAuthClient.instances[0]
+
+
+def test_start_authentication_keeps_old_client_on_failure(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    """The other half of the fresh-client contract: on a failed login, the
+    existing client stays put. Transient errors must not lose state."""
+    app_ctx = _make_app_ctx(tmp_path)
+    original_client = app_ctx.client
+    _FakeAuthClient.login_recipe = [EmpowerAuthError("Bad credentials")]
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert "authentication failed" in result
+    assert app_ctx.client is original_client
+    assert app_ctx.pending_2fa_mode is None
+
+
+def test_start_authentication_no_2fa_clears_pending_mode(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    """Pin Bug 2: stale pending_2fa_mode from an earlier attempt must be
+    cleared on a successful no-2FA login (e.g. user retried after partial
+    flow and the device is now remembered)."""
+    app_ctx = _make_app_ctx(tmp_path)
+    app_ctx.pending_2fa_mode = _TwoFactorMode.SMS  # stale state from prior attempt
+    _FakeAuthClient.login_recipe = [None]
+
+    start_authentication(_make_ctx(app_ctx))
+
+    assert app_ctx.pending_2fa_mode is None
+
+
+def test_get_client_skips_load_session_during_2fa_window(
+    tmp_path: Path,
+    patch_auth_client: None,
+) -> None:
+    """Pin Bug 1: load_session() replaces (not merges) cookies, which would
+    clobber the in-memory challenge cookies that complete_authentication needs.
+    The gate in _get_client must skip the reload while pending_2fa_mode is set.
+    """
+    fresh_client = _FakeAuthClient(session_path=tmp_path / "session.json")
+    _FakeAuthClient.instances = []
+    app_ctx = _AppContext(
+        client=fresh_client,  # type: ignore[arg-type]
+        session_path=tmp_path / "session.json",
+        pending_2fa_mode=_TwoFactorMode.SMS,
+    )
+    ctx = _make_ctx(app_ctx)
+
+    _get_client(ctx)
+    assert fresh_client.load_session_calls == 0, (
+        "load_session must NOT be called while pending_2fa_mode is set"
+    )
+
+    # Clear the gate; subsequent calls reload as before.
+    app_ctx.pending_2fa_mode = None
+    _get_client(ctx)
+    assert fresh_client.load_session_calls == 1

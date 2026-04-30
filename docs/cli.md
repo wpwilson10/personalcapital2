@@ -43,12 +43,22 @@ pc2 mcp
 |---|---|
 | `EMPOWER_EMAIL` | Empower account email (skips the email prompt) |
 | `EMPOWER_PASSWORD` | Empower account password (skips the password prompt). Setting both `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` lets stale-session recovery run without prompting mid-command. |
+| `EMPOWER_2FA_MODE` | `sms` or `email` (case-insensitive). Skips the interactive method-selection prompt when 2FA is required. Empty/whitespace is treated as unset; an invalid value raises `EmpowerAuthError`. Read lazily — only consulted when the server actually requires 2FA, so a leftover value doesn't break flows where the device is remembered. |
 | `PC2_SESSION_PATH` | Override the default session file path (default: `~/.config/personalcapital2/session.json`). Per-command override: `--session PATH`. |
 | `PC2_MCP_MAX_CHARS` | MCP-server-only. Soft cap on tool response size in characters (default: 50,000 ≈ 12,500 tokens). Lists are truncated with `truncated` metadata before exceeding the cap. |
 
 ## Stale-session recovery
 
-If the cached session is rejected by Empower mid-command, `pc2` re-authenticates and retries the request once. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` to avoid a mid-command credential prompt during recovery. Headless 2FA isn't supported yet — non-TTY environments fail fast with a structured `EmpowerAuthError` rather than hanging on the prompt.
+If the cached session is rejected by Empower mid-command, `pc2` re-authenticates and retries the request once. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` to avoid a mid-command credential prompt during recovery.
+
+For fully headless invocation when 2FA may be required, also set `EMPOWER_2FA_MODE` and pipe the verification code on stdin:
+
+```bash
+EMPOWER_EMAIL=... EMPOWER_PASSWORD=... EMPOWER_2FA_MODE=sms \
+    printf '%s\n' "$CODE" | pc2 login
+```
+
+The orchestrator owns SMS/email pickup — pc2 reads the code from stdin. Without `EMPOWER_2FA_MODE`, the 2FA-method prompt would block in a non-TTY environment and fail with `InteractiveAuthRequired`.
 
 ## Exit codes
 
