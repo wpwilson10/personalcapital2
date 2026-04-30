@@ -10,9 +10,9 @@ Get your financial data out of Empower (formerly Personal Capital) and into your
 Three interfaces, one library:
 - **Python API** — frozen dataclasses with `Decimal` precision, not raw JSON
 - **CLI** (`pc2`) — structured JSON to stdout, pipe to `jq`, scripts, or spreadsheets
-- **MCP server** — give Claude or other AI agents direct access to your financial data
+- **MCP server** — drop into Claude Desktop, ask *"how much did I spend on dining last quarter?"*
 
-Built on the reverse-engineering work of [haochi/personalcapital](https://github.com/haochi/personalcapital) and [traviscook21/personalcapital](https://github.com/traviscook21/personalcapital) (both MIT).
+Built on the reverse-engineering work of [haochi/personalcapital](https://github.com/haochi/personalcapital) and [traviscook21/personalcapital](https://github.com/traviscook21/personalcapital) (both MIT). Adds typed dataclasses, an agent-first CLI, and an MCP server on top.
 
 ## Install
 
@@ -25,7 +25,7 @@ uv add personalcapital2
 ## Quick start
 
 ```python
-from datetime import date
+from datetime import date, timedelta
 from personalcapital2 import authenticate
 
 client = authenticate()  # interactive login with 2FA
@@ -35,7 +35,7 @@ for acct in result.accounts:
     print(f"{acct.name:<30} ${acct.balance}")
 print(f"Net worth: ${result.summary.networth:,.2f}")
 
-result = client.get_transactions(date(2026, 1, 1), date(2026, 3, 31))
+result = client.get_transactions(date.today() - timedelta(days=90), date.today())
 for txn in result.transactions:
     print(f"{txn.date}  {txn.description:<30}  ${txn.amount:.2f}")
 print(f"Net cashflow: ${result.summary.net_cashflow:,.2f}")
@@ -52,22 +52,24 @@ print(f"Net cashflow: ${result.summary.net_cashflow:,.2f}")
 | `EMPOWER_2FA_MODE` | `sms` or `email` — skips the interactive 2FA-method prompt (read only when 2FA is required) |
 | `PC2_SESSION_PATH` | Custom session file location (default: `~/.config/personalcapital2/session.json`) |
 
-Credentials are sent directly to Empower's servers over HTTPS — this library never stores, logs, or transmits them anywhere else. Sessions are saved and reused until they expire — typically within ~24 hours, sometimes sooner. The session path can also be overridden per-command with `--session`.
+Credentials go to Empower over HTTPS only — never stored, logged, or transmitted elsewhere.
 
-#### Headless / agentic workflows
+Sessions live ~24 hours. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` (and `EMPOWER_2FA_MODE` if 2FA may fire) so commands self-heal when a session expires; otherwise re-run `pc2 login`. Override the session path per-command with `--session`.
 
-For unattended invocation (cron, GitHub Actions, n8n, AI agents) set the credential and mode env vars and pipe the 6-digit verification code on stdin:
+#### Headless authentication
+
+For unattended invocation, pipe the verification code on stdin:
 
 ```bash
 EMPOWER_EMAIL=... EMPOWER_PASSWORD=... EMPOWER_2FA_MODE=sms \
     printf '%s\n' "$CODE" | pc2 login
 ```
 
-The orchestrator owns SMS / email pickup — pc2 reads the code from stdin. Codes are deliberately not configurable via env var (short-lived secrets in the environment leak through `/proc/PID/environ` and shell history). Without `EMPOWER_2FA_MODE` set, the method-selection prompt blocks in non-TTY environments and the command exits with `InteractiveAuthRequired`.
+The orchestrator handles SMS/email pickup; `pc2` reads the code from stdin.
 
 ## CLI
 
-The `pc2` command outputs structured JSON (data to stdout, errors to stderr). Designed for scripting and AI agents — every error includes a machine-readable type and recovery suggestion.
+The `pc2` command outputs structured JSON (data to stdout, errors to stderr) and follows an [agent-first design](https://dev.to/uenyioha/writing-cli-tools-that-ai-agents-actually-want-to-use-39no): every error has a machine-readable type and recovery suggestion, exit codes are meaningful, and the help text is self-documenting.
 
 ```bash
 pc2 accounts                                # all linked accounts
@@ -82,7 +84,20 @@ Date shortcuts: `30d` (days ago), `mb` / `me` (month begin/end), `yb` / `ye` (ye
 
 ## Python API
 
-All methods return frozen dataclasses with `datetime.date` and `decimal.Decimal` fields. See [API Reference](docs/api.md) for methods, response containers, and examples, and [Model Reference](docs/models.md) for every field and type.
+Methods return response containers with typed dataclass fields and a pre-computed summary, not bare lists:
+
+```python
+result = client.get_accounts()
+result.accounts     # tuple[Account, ...]
+result.summary      # AccountsSummary — networth, assets, liabilities, ...
+
+result = client.get_transactions(start, end)
+result.transactions # tuple[Transaction, ...]
+result.categories   # tuple[Category, ...]
+result.summary      # TransactionsSummary — money_in, money_out, net_cashflow, ...
+```
+
+All fields use `datetime.date` and `decimal.Decimal`. See the [API Reference](docs/api.md) for the full method list and the [Model Reference](docs/models.md) for every field and type.
 
 ## MCP Server
 
@@ -116,26 +131,9 @@ Client config (Claude Code / Claude Desktop):
 
 When the cached session expires mid-conversation, the agent recovers in chat without dropping to a terminal: it calls `start_authentication`, asks you for the 6-digit code, then calls `complete_authentication` with the code. The server reads the credentials and `EMPOWER_2FA_MODE` from this env block.
 
-> **Security note:** `EMPOWER_PASSWORD` in the MCP client config sits plaintext on disk in that config file (e.g. `claude_desktop_config.json`, `.mcp.json`). This is the canonical pattern for MCP server credentials and is consistent with the trust model — the same client already has access to all your financial data via this server — but worth flagging so you can decide whether the convenience is worth the storage.
+> Note: `EMPOWER_PASSWORD` sits plaintext in the MCP client config — standard pattern for MCP servers, but worth knowing.
 
 The server is token-aware — large responses are automatically truncated to fit within context limits (~12,500 tokens by default, configurable via `PC2_MCP_MAX_CHARS`), while summaries are always preserved in full.
-
-The CLI and MCP server follow an [agent-first design](https://dev.to/uenyioha/writing-cli-tools-that-ai-agents-actually-want-to-use-39no): structured JSON errors with recovery suggestions, meaningful exit codes, self-documenting help text, and non-interactive TTY detection.
-
-CLI exit codes:
-
-| Code | Meaning |
-| ---- | ------- |
-| `0` | success |
-| `1` | authentication error (no session, expired, 2FA required) |
-| `2` | usage error (bad arguments, unknown command) |
-| `3` | API error (request failed, rate limited, HTTP 4xx/5xx from Empower) |
-| `4` | unexpected error |
-| `5` | network error (transport-level failure reaching Empower) |
-
-### Session recovery
-
-Stale cached sessions are handled automatically: if a data command finds the saved session expired, the CLI re-authenticates and retries the request once. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` to avoid a mid-command password prompt during recovery; for fully headless flows that may hit 2FA, also set `EMPOWER_2FA_MODE` and pipe the code on stdin (see [Headless / agentic workflows](#headless--agentic-workflows) above).
 
 ## Known API quirks
 
