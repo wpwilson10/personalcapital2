@@ -363,7 +363,7 @@ def test_2fa_challenge_failure_raises() -> None:
         patch.object(client._session, "request", return_value=challenge_resp),
         pytest.raises(EmpowerAuthError, match="Session no longer valid"),
     ):
-        client.send_2fa_challenge(TwoFactorMode.EMAIL)
+        client.send_2fa_challenge(TwoFactorMode.SMS)
 
 
 # --- User-Agent configurability ---
@@ -448,3 +448,61 @@ def test_request_lets_http_error_propagate() -> None:
         pytest.raises(requests.HTTPError),
     ):
         client._request("GET", "https://example.invalid/")
+
+
+# --- Session persistence (cookie round-trip / shadowing) ---
+
+
+def test_session_round_trip_preserves_cookie_attributes(tmp_path: Path) -> None:
+    """save_session/load_session preserve a cookie's domain and path, so a
+    reloaded cookie keys identically to the one the server set."""
+    session_path = tmp_path / "session.json"
+    client = EmpowerClient(session_path=session_path)
+    client._csrf = "csrf-1"
+    client._session.cookies.set(  # pyright: ignore[reportUnknownMemberType]
+        "JSESSIONID", "abc", domain=".empower-retirement.com", path="/"
+    )
+    client.save_session()
+
+    fresh = EmpowerClient(session_path=session_path)  # loads in __init__
+    loaded = [c for c in fresh._session.cookies if c.name == "JSESSIONID"]
+    assert len(loaded) == 1
+    assert loaded[0].value == "abc"
+    assert loaded[0].domain == ".empower-retirement.com"
+    assert loaded[0].path == "/"
+    assert fresh._csrf == "csrf-1"
+    assert fresh.has_loaded_session is True
+
+
+def test_reloaded_cookie_is_overwritten_not_shadowed(tmp_path: Path) -> None:
+    """Regression for the 'Session not authenticated' bug: a reloaded cookie
+    must be overwritten by a fresh same-name cookie on the same domain, not
+    coexist with it. The old domain-less format kept both and the stale one
+    shadowed the fresh one, so the server rejected the data call."""
+    session_path = tmp_path / "session.json"
+    client = EmpowerClient(session_path=session_path)
+    client._session.cookies.set(  # pyright: ignore[reportUnknownMemberType]
+        "JSESSIONID", "stale", domain=".empower-retirement.com", path="/"
+    )
+    client.save_session()
+
+    fresh = EmpowerClient(session_path=session_path)
+    # Server issues a fresh cookie of the same name/domain on the next login.
+    fresh._session.cookies.set(  # pyright: ignore[reportUnknownMemberType]
+        "JSESSIONID", "new", domain=".empower-retirement.com", path="/"
+    )
+    values = [c.value for c in fresh._session.cookies if c.name == "JSESSIONID"]
+    assert values == ["new"], f"expected only the fresh cookie, got {values}"
+
+
+def test_old_format_session_file_is_ignored(tmp_path: Path) -> None:
+    """A pre-0.4.0 {name: value} dict session file is ignored (triggers
+    re-auth) rather than resurrecting domain-less cookies that would shadow
+    fresh ones."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text(json.dumps({"csrf": "x", "cookies": {"JSESSIONID": "stale"}}))
+    session_path.chmod(0o600)
+
+    client = EmpowerClient(session_path=session_path)
+    assert client.has_loaded_session is False
+    assert list(client._session.cookies) == []

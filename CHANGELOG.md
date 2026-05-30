@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-30
+
+### Breaking
+
+- **Removed `TwoFactorMode.EMAIL`.** Empower no longer offers email as a 2FA
+  delivery method — the login screen presents only SMS (and voice call), and
+  the legacy `challengeEmail` endpoint returns success while dispatching no
+  email. `TwoFactorMode` now has a single member, `SMS`. Code that referenced
+  `TwoFactorMode.EMAIL` must use `TwoFactorMode.SMS`.
+
+### Fixed
+
+- **Spurious "Session not authenticated" on the first request after a
+  successful login.** Sessions were saved as a domain-less `{name: value}`
+  cookie dump, so a reloaded cookie no longer collided with the fresh cookie
+  the server set during the next login — both ended up in the jar and the
+  stale one shadowed the fresh one, which Empower rejected. Cookies are now
+  persisted with their `domain`/`path`/`expires`, so the fresh login cookie
+  overwrites the stale one by key. This also lets a remembered device survive
+  across runs instead of re-triggering 2FA every time.
+- **Email 2FA failed silently.** Selecting email dispatched a challenge that
+  never arrived and then blocked waiting for a code; it now errors clearly
+  (see below) instead of hanging.
+
+### Changed
+
+- **`EMPOWER_2FA_MODE` accepts `sms` only and is now optional** — 2FA defaults
+  to SMS when unset (there is no longer a method to choose). A stale `email`
+  value raises a clear `EmpowerAuthError` pointing to SMS rather than a generic
+  "invalid mode" error. The interactive 2FA-method prompt has been removed.
+- **Session file format.** Cookies are stored as a list of objects with full
+  attributes (schema `version: 2`). Pre-0.4.0 files are ignored on load and the
+  client re-authenticates once, rewriting the file in the new format — the
+  session file is a short-lived cache, so no migration is performed.
+- Documentation no longer claims a fixed "6-digit" verification code length
+  (Empower's SMS code is shorter); wording is now length-agnostic.
+
 ## [0.3.0] — 2026-04-29
 
 ### Added

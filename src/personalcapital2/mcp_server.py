@@ -17,8 +17,7 @@ Client config (Claude Code / Claude Desktop):
                 "env": {
                     "PC2_SESSION_PATH": "~/.config/personalcapital2/session.json",
                     "EMPOWER_EMAIL": "you@example.com",
-                    "EMPOWER_PASSWORD": "...",
-                    "EMPOWER_2FA_MODE": "sms"
+                    "EMPOWER_PASSWORD": "..."
                 }
             }
         }
@@ -44,8 +43,6 @@ import requests
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from personalcapital2.types import TwoFactorMode
 from mcp.server.fastmcp import Context, FastMCP
 
 from personalcapital2._serialization import serialize_result
@@ -57,6 +54,7 @@ from personalcapital2.exceptions import (
     EmpowerNetworkError,
     TwoFactorRequiredError,
 )
+from personalcapital2.types import TwoFactorMode
 
 log = logging.getLogger(__name__)
 
@@ -226,8 +224,8 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
             return (
                 f"Error: {exc}\n\n"
                 "Session is expired or invalid. Call start_authentication to "
-                "begin re-auth, then complete_authentication with the 6-digit "
-                "code if 2FA is required."
+                "begin re-auth, then complete_authentication with the "
+                "verification code if 2FA is required."
             )
         except EmpowerNetworkError as exc:
             log.warning("Network error in tool call: %s", exc)
@@ -248,16 +246,14 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
 def start_authentication(ctx: Context) -> str:
     """Re-authenticate when the cached session is stale.
 
-    Reads EMPOWER_EMAIL, EMPOWER_PASSWORD, and (if 2FA required)
-    EMPOWER_2FA_MODE from the MCP server's environment. If the device
-    is remembered, completes authentication directly. Otherwise dispatches
-    a 2FA challenge via SMS or email; call complete_authentication next
-    with the 6-digit code.
+    Reads EMPOWER_EMAIL and EMPOWER_PASSWORD from the MCP server's
+    environment. If the device is remembered, completes authentication
+    directly. Otherwise dispatches a 2FA challenge via SMS; call
+    complete_authentication next with the verification code.
 
-    Each call that hits the 2FA branch dispatches a fresh SMS or email —
-    call sparingly to avoid spamming the user. State is process-local;
-    if the MCP server restarts mid-flow, call this again to begin a new
-    challenge.
+    Each call that hits the 2FA branch dispatches a fresh SMS — call
+    sparingly to avoid spamming the user. State is process-local; if the
+    MCP server restarts mid-flow, call this again to begin a new challenge.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
     email = os.getenv("EMPOWER_EMAIL")
@@ -277,15 +273,12 @@ def start_authentication(ctx: Context) -> str:
     try:
         fresh_client.login(email, password)
     except TwoFactorRequiredError:
+        # SMS is the only method Empower offers, so EMPOWER_2FA_MODE is
+        # optional and defaults to SMS; a stale 'email' value still gets a
+        # clear tombstone error from parse_2fa_mode_env.
         env_mode = os.getenv("EMPOWER_2FA_MODE", "").strip().lower()
-        if not env_mode:
-            return (
-                "Error: 2FA required but EMPOWER_2FA_MODE not set. "
-                "Add EMPOWER_2FA_MODE='sms' or 'email' to the env block "
-                "and restart."
-            )
         try:
-            mode = parse_2fa_mode_env(env_mode)
+            mode = parse_2fa_mode_env(env_mode) if env_mode else TwoFactorMode.SMS
         except EmpowerAuthError as exc:
             return f"Error: {exc}"
         try:
@@ -303,7 +296,7 @@ def start_authentication(ctx: Context) -> str:
         app_ctx.pending_2fa_mode = mode
         return (
             f"2FA challenge sent via {mode.value}. "
-            "Call complete_authentication with the 6-digit code."
+            "Call complete_authentication with the verification code."
         )
     except EmpowerNetworkError as exc:
         return f"Error: network failure during login — {exc}. Check connection and try again."
@@ -321,10 +314,10 @@ def start_authentication(ctx: Context) -> str:
 
 
 def complete_authentication(ctx: Context, code: str) -> str:
-    """Submit the 6-digit 2FA code to complete authentication.
+    """Submit the 2FA verification code to complete authentication.
 
     Call this after start_authentication has dispatched a 2FA challenge.
-    Pass the 6-digit code that was sent to the user's phone or email.
+    Pass the verification code that was sent to the user's phone via SMS.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
     if app_ctx.pending_2fa_mode is None:
@@ -389,7 +382,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     #
     # Two tools (not one stateful tool) for LLM ergonomics: each has a single
     # clear purpose. State (pending_2fa_mode) lives on _AppContext so the
-    # 6-digit code can be collected from the user mid-conversation.
+    # verification code can be collected from the user mid-conversation.
     #
     # These deliberately do NOT use @_handle_tool_errors — that decorator
     # would direct callers BACK to start_authentication on EmpowerAuthError,
@@ -419,7 +412,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if the session is expired — call
         start_authentication to begin re-auth, then complete_authentication
-        with the 6-digit code if 2FA is required.
+        with the verification code if 2FA is required.
         """
         client = _get_client(ctx)
         result = client.get_accounts()
@@ -443,7 +436,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if start_date is after end_date,
         or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the 6-digit code
+        to begin re-auth, then complete_authentication with the verification code
         if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
@@ -471,7 +464,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if the session is expired — call
         start_authentication to begin re-auth, then complete_authentication
-        with the 6-digit code if 2FA is required.
+        with the verification code if 2FA is required.
         """
         if limit < 1:
             return "Error: limit must be at least 1."
@@ -499,7 +492,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if start_date is after end_date,
         or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the 6-digit code
+        to begin re-auth, then complete_authentication with the verification code
         if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
@@ -532,7 +525,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if start_date is after end_date,
         or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the 6-digit code
+        to begin re-auth, then complete_authentication with the verification code
         if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
@@ -575,7 +568,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if start_date is after end_date,
         or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the 6-digit code
+        to begin re-auth, then complete_authentication with the verification code
         if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
@@ -603,7 +596,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if start_date is after end_date,
         or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the 6-digit code
+        to begin re-auth, then complete_authentication with the verification code
         if 2FA is required.
         """
         if err := _validate_date_range(start_date, end_date):
@@ -637,7 +630,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
         Errors: returns an error message if the session is expired — call
         start_authentication to begin re-auth, then complete_authentication
-        with the 6-digit code if 2FA is required.
+        with the verification code if 2FA is required.
         """
         today = date.today()
         effective_start = start_date or today

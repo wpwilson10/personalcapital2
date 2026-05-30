@@ -498,9 +498,10 @@ def test_snapshot_help_shows_format_behavior(capsys: pytest.CaptureFixture[str])
 def _create_session(tmp_path: Path) -> Path:
     """Create a valid session file and return its path."""
     session_path = tmp_path / "session.json"
-    session_data: dict[str, str | dict[str, str]] = {
+    session_data: dict[str, object] = {
+        "version": 2,
         "csrf": "test-csrf-token",
-        "cookies": {},
+        "cookies": [],
     }
     session_path.write_text(json.dumps(session_data))
     session_path.chmod(0o600)

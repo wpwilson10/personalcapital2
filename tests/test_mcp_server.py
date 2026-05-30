@@ -323,7 +323,7 @@ def mock_client() -> MagicMock:
 def session_file(tmp_path: Path) -> Path:
     """Create a fake session file."""
     f = tmp_path / "session.json"
-    f.write_text('{"csrf": "test", "cookies": {}}')
+    f.write_text('{"version": 2, "csrf": "test", "cookies": []}')
     f.chmod(0o600)
     return f
 
@@ -1437,19 +1437,44 @@ def test_start_authentication_missing_credentials(
     assert _FakeAuthClient.instances == []
 
 
-def test_start_authentication_2fa_required_but_mode_unset(
+def test_start_authentication_2fa_required_mode_unset_defaults_to_sms(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     auth_env: None,
     patch_auth_client: None,
 ) -> None:
+    """With EMPOWER_2FA_MODE unset, 2FA defaults to SMS — the only method
+    Empower offers — instead of erroring."""
     monkeypatch.delenv("EMPOWER_2FA_MODE", raising=False)
     app_ctx = _make_app_ctx(tmp_path)
     _FakeAuthClient.login_recipe = [TwoFactorRequiredError()]
 
     result = start_authentication(_make_ctx(app_ctx))
 
-    assert "EMPOWER_2FA_MODE" in result
+    assert "complete_authentication" in result
+    assert "SMS" in result
+    assert app_ctx.pending_2fa_mode is _TwoFactorMode.SMS
+    fresh = _FakeAuthClient.instances[0]
+    assert fresh.send_2fa_modes == [_TwoFactorMode.SMS]
+
+
+def test_start_authentication_2fa_mode_email_tombstone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    """A stale EMPOWER_2FA_MODE=email returns a clear tombstone error (Empower
+    removed email 2FA) rather than dispatching a challenge that never arrives."""
+    monkeypatch.setenv("EMPOWER_2FA_MODE", "email")
+    app_ctx = _make_app_ctx(tmp_path)
+    _FakeAuthClient.login_recipe = [TwoFactorRequiredError()]
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert "Error" in result
+    assert "email" in result.lower()
+    assert "sms" in result.lower()
     assert app_ctx.pending_2fa_mode is None
     fresh = _FakeAuthClient.instances[0]
     assert fresh.send_2fa_calls == 0
