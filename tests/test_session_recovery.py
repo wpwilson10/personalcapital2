@@ -224,16 +224,18 @@ def test_authenticate_non_tty_email_prompt(
         authenticate(session_path)
 
 
-# --- 5. Non-TTY at 2FA-method prompt → InteractiveAuthRequired; session preserved ---
+# --- 5. Non-TTY, no mode set → defaults to SMS; session preserved ---
 
 
-def test_authenticate_non_tty_2fa_method_preserves_session(
+def test_authenticate_non_tty_no_mode_defaults_to_sms_preserves_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     env_creds: None,
 ) -> None:
-    """Regression guard for the InteractiveAuthRequired carve-out in the inner
-    retry: non-TTY at the 2FA-method prompt must NOT trigger session unlink."""
+    """With no EMPOWER_2FA_MODE and no TTY, authenticate defaults to SMS (the
+    only method Empower offers — there's no method prompt to block on),
+    dispatches the challenge, then raises InteractiveAuthRequired at the
+    verification-code prompt without unlinking the cached session."""
     session_path = tmp_path / "session.json"
     session_path.write_text("{}")
 
@@ -244,18 +246,17 @@ def test_authenticate_non_tty_2fa_method_preserves_session(
 
     _patch_input(monkeypatch, raise_eof)
 
-    with pytest.raises(InteractiveAuthRequired, match="EMPOWER_2FA_MODE"):
+    with pytest.raises(InteractiveAuthRequired, match="2FA verification cannot complete"):
         authenticate(session_path)
 
-    assert session_path.exists(), (
-        "non-TTY 2FA-method prompt must preserve the cached session "
-        "(the InteractiveAuthRequired carve-out)"
-    )
+    client = _FakeClient.instances[0]
+    assert client.send_2fa_modes == [TwoFactorMode.SMS]
+    assert session_path.exists(), "non-TTY at the code prompt must preserve the cached session"
     # Only one client — no retry occurred.
     assert len(_FakeClient.instances) == 1
 
 
-# --- 6. Non-TTY at verification-code prompt → InteractiveAuthRequired ---
+# --- 6. Non-TTY at verification-code prompt (explicit mode) → InteractiveAuthRequired ---
 
 
 def test_authenticate_non_tty_verify_code_prompt(
@@ -265,21 +266,14 @@ def test_authenticate_non_tty_verify_code_prompt(
 ) -> None:
     session_path = tmp_path / "session.json"
     session_path.write_text("{}")
+    monkeypatch.setenv("EMPOWER_2FA_MODE", "sms")
 
     _FakeClient.login_recipe = [TwoFactorRequiredError()]
 
-    # First input() call answers the 2FA-method prompt; the next one (code prompt) EOFs.
-    # _prompt() writes the message to stderr and calls input() without args, so we can't
-    # dispatch on prompt content — track call ordering with a queue instead.
-    answers = iter(["1"])
+    def raise_eof(_prompt: str = "") -> str:
+        raise EOFError
 
-    def queued_or_eof(_prompt: str = "") -> str:
-        try:
-            return next(answers)
-        except StopIteration:
-            raise EOFError from None
-
-    _patch_input(monkeypatch, queued_or_eof)
+    _patch_input(monkeypatch, raise_eof)
 
     with pytest.raises(InteractiveAuthRequired, match="2FA verification cannot complete"):
         authenticate(session_path)
@@ -554,7 +548,22 @@ def test_has_loaded_session_true_when_csrf_loaded(tmp_path: Path) -> None:
     from personalcapital2.client import EmpowerClient
 
     session_path = tmp_path / "session.json"
-    session_path.write_text(json.dumps({"csrf": "abc-123", "cookies": {"foo": "bar"}}))
+    session_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "csrf": "abc-123",
+                "cookies": [
+                    {
+                        "name": "foo",
+                        "value": "bar",
+                        "domain": ".empower-retirement.com",
+                        "path": "/",
+                    }
+                ],
+            }
+        )
+    )
     session_path.chmod(0o600)
     client = EmpowerClient(session_path=session_path)
     assert client.has_loaded_session is True
@@ -650,25 +659,29 @@ def test_authenticate_2fa_mode_env_sms(
     assert client.verify_2fa_modes == [TwoFactorMode.SMS]
 
 
-def test_authenticate_2fa_mode_env_email(
+def test_authenticate_2fa_mode_env_email_raises_tombstone(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     env_creds: None,
 ) -> None:
-    """EMPOWER_2FA_MODE=email dispatches via email."""
+    """EMPOWER_2FA_MODE=email raises a clear tombstone error — Empower removed
+    email 2FA server-side, so stale config is redirected to SMS rather than
+    silently dispatching a challenge that never arrives."""
     session_path = tmp_path / "session.json"
     session_path.write_text("{}")
     monkeypatch.setenv("EMPOWER_2FA_MODE", "email")
 
     _FakeClient.login_recipe = [TwoFactorRequiredError()]
-    answers = iter(["123456"])
-    _patch_input(monkeypatch, lambda _prompt="": next(answers))
+    # The tombstone error fires before any prompt; input() must not be reached.
+    _patch_input(monkeypatch, _input_must_not_be_called)
 
-    authenticate(session_path)
+    with pytest.raises(EmpowerAuthError) as exc_info:
+        authenticate(session_path)
 
-    client = _FakeClient.instances[0]
-    assert client.send_2fa_modes == [TwoFactorMode.EMAIL]
-    assert client.verify_2fa_modes == [TwoFactorMode.EMAIL]
+    assert type(exc_info.value) is EmpowerAuthError
+    msg = str(exc_info.value).lower()
+    assert "email" in msg
+    assert "sms" in msg
 
 
 def test_authenticate_2fa_mode_env_case_insensitive(
@@ -716,29 +729,29 @@ def test_authenticate_2fa_mode_env_invalid_raises_autherror(
     assert "carrier-pigeon" in str(exc_info.value)
 
 
-def test_authenticate_2fa_mode_env_empty_falls_through_to_prompt(
+def test_authenticate_2fa_mode_env_empty_defaults_to_sms(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     env_creds: None,
 ) -> None:
-    """Empty/whitespace EMPOWER_2FA_MODE is treated as unset — orchestrator
-    templating commonly produces empty env vars from missing upstream values.
-    Falls through to the interactive prompt; non-TTY there raises
-    InteractiveAuthRequired as usual.
+    """Empty/whitespace EMPOWER_2FA_MODE is treated as unset and defaults to
+    SMS — the only method Empower still offers. Orchestrator templating
+    commonly produces empty env vars from missing upstream values, and there's
+    no longer a method prompt to fall through to.
     """
     session_path = tmp_path / "session.json"
     session_path.write_text("{}")
     monkeypatch.setenv("EMPOWER_2FA_MODE", "   ")  # whitespace == unset
 
     _FakeClient.login_recipe = [TwoFactorRequiredError()]
+    answers = iter(["123456"])
+    _patch_input(monkeypatch, lambda _prompt="": next(answers))
 
-    def raise_eof(_prompt: str = "") -> str:
-        raise EOFError
+    authenticate(session_path)
 
-    _patch_input(monkeypatch, raise_eof)
-
-    with pytest.raises(InteractiveAuthRequired, match="EMPOWER_2FA_MODE"):
-        authenticate(session_path)
+    client = _FakeClient.instances[0]
+    assert client.send_2fa_modes == [TwoFactorMode.SMS]
+    assert client.verify_2fa_modes == [TwoFactorMode.SMS]
 
 
 def test_authenticate_2fa_mode_env_ignored_when_no_2fa_required(

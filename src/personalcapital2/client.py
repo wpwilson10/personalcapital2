@@ -22,10 +22,11 @@ import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import requests
 from requests.adapters import HTTPAdapter
+from requests.cookies import RequestsCookieJar
 from urllib3.util.retry import Retry
 
 from personalcapital2.exceptions import (
@@ -176,7 +177,7 @@ class EmpowerClient:
         # Retry transient HTTP errors with exponential backoff.
         # POST is included because Empower uses POST for all endpoints,
         # including read-only data queries. The only non-idempotent POSTs
-        # are 2FA challenge endpoints (SMS/email), but retries are limited
+        # are 2FA challenge endpoints (SMS), but retries are limited
         # to server errors (5xx/429) where the original request likely
         # failed before any side effects.
         retry = Retry(
@@ -252,7 +253,7 @@ class EmpowerClient:
         self._authenticate_password(password)
 
     def send_2fa_challenge(self, mode: TwoFactorMode) -> None:
-        """Send a 2FA challenge (SMS or email) without completing the flow."""
+        """Send a 2FA challenge (SMS) without completing the flow."""
         self._send_2fa_challenge(mode)
 
     def verify_2fa_and_login(self, mode: TwoFactorMode, code: str, password: str) -> None:
@@ -482,6 +483,14 @@ class EmpowerClient:
     def save_session(self, path: Path | None = None) -> None:
         """Save session cookies and CSRF token to a JSON file (chmod 600).
 
+        Persists each cookie's ``domain``/``path``/``expires`` (not just
+        name=value). Dropping the domain — as a plain ``{name: value}`` dump
+        does — makes a reloaded cookie domain-less, so it no longer collides
+        with the fresh cookie the server sets on the next login: both end up in
+        the jar and the stale one shadows the fresh one, which the server
+        rejects ("Session not authenticated"). Preserving the domain lets the
+        next login's Set-Cookie overwrite the stale cookie by key.
+
         Uses atomic write (write to temp file, then rename) to prevent
         corrupt or world-readable session files on crash.
         """
@@ -491,10 +500,19 @@ class EmpowerClient:
 
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        cookies: dict[str, str] = requests.utils.dict_from_cookiejar(  # type: ignore[no-untyped-call] — requests.utils is untyped
-            self._session.cookies
-        )
-        session_data: dict[str, str | dict[str, str]] = {
+        cookies: list[dict[str, Any]] = [
+            {
+                "name": c.name,
+                "value": c.value,
+                "domain": c.domain,
+                "path": c.path,
+                "expires": c.expires,
+                "secure": c.secure,
+            }
+            for c in self._session.cookies
+        ]
+        session_data: dict[str, Any] = {
+            "version": 2,
             "csrf": self._csrf,
             "cookies": cookies,
         }
@@ -536,7 +554,7 @@ class EmpowerClient:
         try:
             data = json.loads(self._session_path.read_text())
             csrf = data.get("csrf", "")
-            cookies = data.get("cookies", {})
+            cookies = data.get("cookies")
             if not csrf and not cookies:
                 # An empty/malformed session file silently produced an unauthenticated
                 # client that later failed with a confusing "Session is no longer valid".
@@ -547,11 +565,38 @@ class EmpowerClient:
                     self._session_path,
                 )
                 return
+            if not isinstance(cookies, list):
+                # Pre-0.4.0 format stored cookies as a domain-less {name: value}
+                # dict. Reloading those caused stale cookies to shadow fresh ones
+                # ("Session not authenticated"). The session file is a disposable
+                # cache, so don't resurrect them — ignore and re-authenticate. The
+                # next save_session() rewrites the file in the current format.
+                log.info(
+                    "Session file %s uses an old format; re-authenticating",
+                    self._session_path,
+                )
+                return
+            jar = RequestsCookieJar()
+            # json.loads returns Any; isinstance() above narrows it to a list
+            # with Unknown elements, so name the entry type explicitly. The
+            # individual reads below are validated at runtime by the except clause.
+            for c in cast("list[dict[str, Any]]", cookies):
+                # requests' RequestsCookieJar.set stub types **kwargs as Unknown.
+                jar.set(  # type: ignore[reportUnknownMemberType]
+                    c["name"],
+                    c["value"],
+                    domain=c.get("domain", ""),
+                    path=c.get("path", "/"),
+                    expires=c.get("expires"),
+                    secure=c.get("secure", False),
+                )
             self._csrf = csrf
-            self._session.cookies = requests.utils.cookiejar_from_dict(cookies)  # type: ignore[no-untyped-call] — requests.utils is untyped
+            # Assign (replace) rather than merge: mcp_server._get_client reloads on
+            # every call and relies on a stale-cookie-free jar after re-auth.
+            self._session.cookies = jar
             self._loaded_from_disk = True
             log.info("Loaded session from %s", self._session_path)
-        except (json.JSONDecodeError, KeyError, ValueError, AttributeError) as err:
+        except (json.JSONDecodeError, KeyError, ValueError, AttributeError, TypeError) as err:
             log.warning("Could not load session: %s", err)
 
     # --- Private Methods ---
@@ -688,14 +733,12 @@ class EmpowerClient:
             self._csrf = header["csrf"]
 
     def _send_2fa_challenge(self, mode: TwoFactorMode) -> None:
-        """Request a 2FA code via SMS or email."""
+        """Request a 2FA code via SMS."""
         endpoints = {
             TwoFactorMode.SMS: "/credential/challengeSms",
-            TwoFactorMode.EMAIL: "/credential/challengeEmail",
         }
         challenge_types = {
             TwoFactorMode.SMS: "challengeSMS",
-            TwoFactorMode.EMAIL: "challengeEmail",
         }
         data = {
             "challengeReason": "DEVICE_AUTH",
@@ -734,7 +777,6 @@ class EmpowerClient:
         """Submit the 2FA verification code."""
         endpoints = {
             TwoFactorMode.SMS: "/credential/authenticateSms",
-            TwoFactorMode.EMAIL: "/credential/authenticateEmailByCode",
         }
         data = {
             "challengeReason": "DEVICE_AUTH",

@@ -49,23 +49,25 @@ print(f"Net cashflow: ${result.summary.net_cashflow:,.2f}")
 |---|---|
 | `EMPOWER_EMAIL` | Empower account email |
 | `EMPOWER_PASSWORD` | Empower account password |
-| `EMPOWER_2FA_MODE` | `sms` or `email` — skips the interactive 2FA-method prompt (read only when 2FA is required) |
+| `EMPOWER_2FA_MODE` | `sms` (the only method Empower still offers) — optional; 2FA defaults to SMS |
 | `PC2_SESSION_PATH` | Custom session file location (default: `~/.config/personalcapital2/session.json`) |
 
 Credentials go to Empower over HTTPS only — never stored, logged, or transmitted elsewhere.
 
-Sessions live ~24 hours. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` (and `EMPOWER_2FA_MODE` if 2FA may fire) so commands self-heal when a session expires; otherwise re-run `pc2 login`. Override the session path per-command with `--session`.
+> **Note:** Empower removed email 2FA — verification codes are sent by SMS only. `EMPOWER_2FA_MODE` is kept for compatibility but now only accepts `sms`; a stale `email` value raises a clear error pointing you to SMS.
+
+Sessions live ~24 hours. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` so commands self-heal when a session expires; otherwise re-run `pc2 login`. Override the session path per-command with `--session`.
 
 #### Headless authentication
 
 For unattended invocation, pipe the verification code on stdin:
 
 ```bash
-EMPOWER_EMAIL=... EMPOWER_PASSWORD=... EMPOWER_2FA_MODE=sms \
+EMPOWER_EMAIL=... EMPOWER_PASSWORD=... \
     printf '%s\n' "$CODE" | pc2 login
 ```
 
-The orchestrator handles SMS/email pickup; `pc2` reads the code from stdin.
+The orchestrator handles SMS code pickup; `pc2` reads the code from stdin.
 
 ## CLI
 
@@ -121,15 +123,14 @@ Client config (Claude Code / Claude Desktop):
       "env": {
         "PC2_SESSION_PATH": "~/.config/personalcapital2/session.json",
         "EMPOWER_EMAIL": "you@example.com",
-        "EMPOWER_PASSWORD": "...",
-        "EMPOWER_2FA_MODE": "sms"
+        "EMPOWER_PASSWORD": "..."
       }
     }
   }
 }
 ```
 
-When the cached session expires mid-conversation, the agent recovers in chat without dropping to a terminal: it calls `start_authentication`, asks you for the 6-digit code, then calls `complete_authentication` with the code. The server reads the credentials and `EMPOWER_2FA_MODE` from this env block.
+When the cached session expires mid-conversation, the agent recovers in chat without dropping to a terminal: it calls `start_authentication`, asks you for the SMS verification code, then calls `complete_authentication` with the code. The server reads the credentials from this env block.
 
 > Note: `EMPOWER_PASSWORD` sits plaintext in the MCP client config — standard pattern for MCP servers, but worth knowing.
 
@@ -144,4 +145,4 @@ This library uses Empower's unofficial internal web API, which is not affiliated
 - **`get_accounts` may not list all accounts with holdings.** Some accounts (employer 401k plans, crypto exchanges) can appear in `get_holdings`, `get_account_balances`, and `get_performance` but not in `get_accounts`. Use `get_holdings` to discover investment account IDs.
 - **Fee fields can be `NaN`.** The API returns `"NaN"` for `fees_per_year`, `fund_fees`, `total_fee`, and `advisory_fee_percentage` on some investment accounts (401k plans, crypto, RSUs). These are coerced to `None` — the account is not dropped.
 - **`get_spending` ignores date range and interval.** The API always returns current-period spending for all three interval types (MONTH, WEEK, YEAR), regardless of the `start_date`, `end_date`, or `interval` parameters.
-- **Sessions expire.** Typically ~24 hours, sometimes sooner. CLI users run `pc2 login` again; MCP users let the agent call `start_authentication` / `complete_authentication`. Stale-session recovery handles this automatically when `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` (and `EMPOWER_2FA_MODE` if needed) are set.
+- **Sessions expire.** Typically ~24 hours, sometimes sooner. CLI users run `pc2 login` again; MCP users let the agent call `start_authentication` / `complete_authentication`. Stale-session recovery handles this automatically when `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` are set.

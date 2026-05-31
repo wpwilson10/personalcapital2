@@ -5,4 +5,3 @@ from enum import Enum
 
 class TwoFactorMode(Enum):
     SMS = "SMS"
-    EMAIL = "EMAIL"

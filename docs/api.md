@@ -114,7 +114,7 @@ If `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` aren't set, recovery prompts for credentia
 
 ## Headless library use
 
-`authenticate()` is a TTY-friendly convenience wrapper. Library callers wanting full control over credential sourcing and 2FA pickup — for example, an agent that retrieves the verification code from an SMS provider or IMAP inbox — can skip `authenticate()` and call the lower-level `EmpowerClient` methods directly.
+`authenticate()` is a TTY-friendly convenience wrapper. Library callers wanting full control over credential sourcing and 2FA pickup — for example, an agent that retrieves the SMS verification code from an SMS provider — can skip `authenticate()` and call the lower-level `EmpowerClient` methods directly.
 
 ```python
 from pathlib import Path

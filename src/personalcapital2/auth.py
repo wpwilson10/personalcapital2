@@ -46,8 +46,11 @@ def parse_2fa_mode_env(value: str) -> TwoFactorMode:
     if value == "sms":
         return TwoFactorMode.SMS
     if value == "email":
-        return TwoFactorMode.EMAIL
-    raise EmpowerAuthError(f"Invalid EMPOWER_2FA_MODE={value!r}: must be 'sms' or 'email'")
+        # Tombstone: Empower removed email 2FA server-side (the challengeEmail
+        # endpoint now returns success but dispatches nothing). Point stale
+        # config at the working method instead of a generic "invalid" error.
+        raise EmpowerAuthError("Empower no longer supports email 2FA — set EMPOWER_2FA_MODE=sms")
+    raise EmpowerAuthError(f"Invalid EMPOWER_2FA_MODE={value!r}: must be 'sms'")
 
 
 def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
@@ -101,30 +104,21 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
         # Read EMPOWER_2FA_MODE inside this branch (not eagerly) so an
         # invalid value lying around in the environment doesn't break flows
         # where the device is already remembered and 2FA isn't triggered.
+        # SMS is the only method Empower still offers, so there's no method
+        # prompt — a set value is validated (a stale 'email' gets a clear
+        # tombstone error), otherwise we default to SMS.
         env_mode = os.environ.get("EMPOWER_2FA_MODE", "").strip().lower()
-        if env_mode:
-            mode = parse_2fa_mode_env(env_mode)
-        else:
-            try:
-                print("\n2FA required. Choose method:", file=sys.stderr)
-                print("  1. SMS", file=sys.stderr)
-                print("  2. Email", file=sys.stderr)
-                choice = _prompt("Choice [1]: ").strip() or "1"
-            except EOFError:
-                raise InteractiveAuthRequired(
-                    "2FA mode prompt cannot complete without an interactive "
-                    "terminal. Set EMPOWER_2FA_MODE=sms or email and pipe the "
-                    "6-digit verification code on stdin for headless use."
-                ) from None
-            mode = TwoFactorMode.SMS if choice == "1" else TwoFactorMode.EMAIL
+        mode = parse_2fa_mode_env(env_mode) if env_mode else TwoFactorMode.SMS
+        print("\n2FA required — sending SMS verification code.", file=sys.stderr)
         client.send_2fa_challenge(mode)
         return client, mode
 
     try:
         client, mode = _login_and_maybe_challenge()
     except InteractiveAuthRequired:
-        # Non-TTY at the 2FA-method prompt is NOT a stale-session problem.
-        # Re-raise without unlinking — preserve the user's cached session.
+        # InteractiveAuthRequired subclasses EmpowerAuthError; catch it first so
+        # a "no TTY" signal is never mistaken for stale cookies and never
+        # triggers a session unlink. Re-raise as-is, preserving the cached session.
         raise
     except EmpowerAuthError:
         # Stale cached cookies. Clear and retry once with a fresh client.
