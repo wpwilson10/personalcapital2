@@ -742,7 +742,7 @@ client config (Claude Code / Claude Desktop):
 def _unwrap_singleton_group(exc: BaseException) -> BaseException:
     """Strip nested singleton BaseExceptionGroup wrappers to expose the real cause.
 
-    FastMCP's lifespan runs under an anyio TaskGroup, which wraps any startup
+    The MCP server's lifespan runs under an anyio TaskGroup, which wraps any startup
     exception in a BaseExceptionGroup. Without this, ``pc2 mcp`` failures
     surface as a useless ``"unhandled errors in a TaskGroup (1 sub-exception)"``
     message and exit code 4, instead of the underlying typed error.
@@ -775,7 +775,7 @@ def main(argv: list[str] | None = None) -> None:
         except BaseExceptionGroup as eg:
             # Re-raise the singleton inner exception so the typed-handler chain
             # below dispatches on the real cause (e.g. EmpowerAuthError from a
-            # FastMCP lifespan), not the opaque group wrapper.
+            # MCP server lifespan), not the opaque group wrapper.
             cause = _unwrap_singleton_group(eg)
             if cause is eg:
                 raise

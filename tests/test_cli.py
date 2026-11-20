@@ -1376,7 +1376,7 @@ def test_data_command_recovers_from_stale_session(
 def test_singleton_exception_group_is_unwrapped(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """FastMCP's anyio TaskGroup wraps lifespan errors in BaseExceptionGroup.
+    """The MCP server's anyio TaskGroup wraps lifespan errors in BaseExceptionGroup.
     Without unwrapping, ``pc2 mcp`` failures surface as a useless 'unhandled
     errors in a TaskGroup' message at exit code 4. After unwrapping, the
     inner typed exception flows through the existing handler chain."""
