@@ -564,6 +564,16 @@ async def test_empower_network_error_returns_message(server: Any, mock_client: M
     assert "Check connection and retry" in text
 
 
+async def test_value_error_returns_message(server: Any, mock_client: MagicMock) -> None:
+    """Response-shape drift (ValueError from the validators) must reach the
+    model with its detail. Since mcp 2.1 an escaping exception arrives only as
+    'Error executing tool <name>'."""
+    mock_client.get_accounts.side_effect = ValueError("missing field 'accounts'")
+    text = await _call_tool(server, "get_accounts", mock_client=mock_client)
+    assert text.startswith("Error: unexpected API response")
+    assert "missing field 'accounts'" in text
+
+
 # --- Date validation tests ---
 
 

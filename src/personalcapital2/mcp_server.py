@@ -239,6 +239,13 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
             # path bypasses _request().
             log.warning("Unwrapped network error in tool call: %s", exc)
             return f"Error: Network request failed — {exc}"
+        except ValueError as exc:
+            # The response validators raise ValueError when the API's response
+            # shape drifts. Since mcp 2.1, an exception that escapes a tool
+            # reaches the model only as "Error executing tool <name>", so
+            # surface the detail here.
+            log.warning("Unexpected API response in tool call: %s", exc)
+            return f"Error: unexpected API response — {exc}"
 
     return wrapper
 
