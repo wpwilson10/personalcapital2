@@ -1619,3 +1619,16 @@ def test_get_client_skips_load_session_during_2fa_window(
     app_ctx.pending_2fa_mode = None
     _get_client(ctx)
     assert fresh_client.load_session_calls == 1
+
+
+async def test_server_info_reports_package_version(server: Any) -> None:
+    """mcp 2.x sends an empty serverInfo.version unless one is passed."""
+    from importlib.metadata import version
+
+    from mcp import Client
+
+    async with Client(server, mode="legacy") as client:
+        info = client.server_info
+    assert info is not None
+    assert info.name == "empower"
+    assert info.version == version("personalcapital2")

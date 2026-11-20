@@ -1424,3 +1424,52 @@ def test_multi_exception_group_is_not_unwrapped(
     # branch with EXIT_UNEXPECTED.
     assert exc_info.value.code != EXIT_AUTH
     assert exc_info.value.code != EXIT_NETWORK
+
+
+# --- pc2 mcp import failures ---
+
+
+@pytest.mark.parametrize(
+    ("installed", "expected_error", "expected_suggestion"),
+    [
+        # No mcp at all.
+        (None, "requires the [mcp] extra", "pip install 'personalcapital2[mcp]'"),
+        # An older mcp left behind by upgrading without the extra.
+        ("1.27.0", "needs mcp>=2.1, but mcp 1.27.0", "pip install -U 'personalcapital2[mcp]'"),
+        # A new-enough mcp that still fails: show the underlying import error.
+        ("2.3.0", "personalcapital2.mcp_server", "pip install -U 'personalcapital2[mcp]'"),
+    ],
+)
+def test_mcp_import_failure(
+    installed: str | None,
+    expected_error: str,
+    expected_suggestion: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from importlib.metadata import PackageNotFoundError
+
+    import personalcapital2
+
+    def fake_version(name: str) -> str:
+        assert name == "mcp"
+        if installed is None:
+            raise PackageNotFoundError(name)
+        return installed
+
+    # `from personalcapital2 import mcp_server` returns the package attribute if
+    # another test already imported the module, bypassing sys.modules below.
+    monkeypatch.delattr(personalcapital2, "mcp_server", raising=False)
+    with (
+        # A None entry in sys.modules makes the import raise ImportError.
+        patch.dict("sys.modules", {"personalcapital2.mcp_server": None}),
+        patch("personalcapital2.cli._pkg_version", fake_version),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(["mcp"])
+
+    assert exc_info.value.code == EXIT_USAGE
+    err = json.loads(capsys.readouterr().err)
+    assert err["type"] == "ImportError"
+    assert expected_error in err["error"]
+    assert err["suggestion"] == expected_suggestion

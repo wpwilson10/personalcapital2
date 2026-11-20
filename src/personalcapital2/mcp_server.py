@@ -36,6 +36,7 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from datetime import date
 from functools import wraps
+from importlib.metadata import version as _package_version
 from pathlib import Path  # noqa: TC003 — needed at runtime by lifespan
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -382,6 +383,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
 
     mcp = MCPServer(
         name="empower",
+        version=_package_version("personalcapital2"),
         lifespan=lifespan,
     )
 
