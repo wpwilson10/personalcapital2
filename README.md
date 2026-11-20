@@ -106,10 +106,12 @@ All fields use `datetime.date` and `decimal.Decimal`. See the [API Reference](do
 An MCP tool server gives AI agents (Claude Code, Claude Desktop, etc.) direct access to your financial data. The agent can call tools like `get_transactions` or `get_holdings` and reason over the results.
 
 ```bash
-pip install "personalcapital2[mcp]"
+uv tool install "personalcapital2[mcp]"   # or: pip install "personalcapital2[mcp]"
 pc2 login   # authenticate first
 pc2 mcp     # start the server
 ```
+
+The `[mcp]` extra needs `mcp>=2.1`. When upgrading from 0.4.x, upgrade the extra too: `uv tool upgrade personalcapital2` or `pip install -U "personalcapital2[mcp]"`.
 
 Client config (Claude Code / Claude Desktop):
 

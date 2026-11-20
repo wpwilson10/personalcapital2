@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-11-20
+
+### Changed
+
+- **The `[mcp]` extra now requires the MCP Python SDK 2.x** (`mcp>=2.1,<3.0`).
+  The server keeps working with clients on earlier protocol versions, and the
+  MCP tools are unchanged. When upgrading, upgrade the extra as well
+  (`uv tool upgrade personalcapital2` or `pip install -U "personalcapital2[mcp]"`);
+  upgrading `personalcapital2` alone leaves mcp 1.x installed, and `pc2 mcp`
+  now says so.
+- **Tested on Python 3.12 through 3.15.**
+- The README recommends `uv tool install "personalcapital2[mcp]"` for the MCP
+  server.
+
+### Fixed
+
+- Under mcp 2.1+, an unexpected API response shape reaches the agent as a
+  readable error instead of "Error executing tool <name>".
+- The MCP server reports the package version in `serverInfo`.
+
 ## [0.4.0] — 2026-05-30
 
 ### Breaking
