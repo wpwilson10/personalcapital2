@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +18,7 @@ from personalcapital2.exceptions import (
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.types import TwoFactorMode
@@ -104,9 +106,329 @@ def test_login_raises_auth_error_on_none_auth_level() -> None:
 
     with (
         patch.object(client._session, "request", side_effect=[csrf_page, identify_resp]),
-        pytest.raises(EmpowerAuthError, match="rate-limited"),
+        pytest.raises(EmpowerAuthError, match="rate-limited") as exc_info,
     ):
         client.login("user@example.com", "password123")
+    # No reason given → plain EmpowerAuthError, so the stale-session retry still applies.
+    assert type(exc_info.value) is EmpowerAuthError
+
+
+# identifyUser rejections. Codes and messages for 113/207 are the ones quoted in
+# issue #9; the surrounding payloads are reconstructed, not captured responses.
+
+
+def _identify_error(header: dict[str, object]) -> EmpowerAuthError:
+    """Run login() against an identifyUser spHeader and return the raised error."""
+    client = EmpowerClient()
+    csrf_page = _mock_response(text="window.csrf='aaa-111-bbb'")
+    identify_resp = _mock_response(json_data={"spHeader": header})
+    with (
+        patch.object(client._session, "request", side_effect=[csrf_page, identify_resp]),
+        pytest.raises(EmpowerAuthError) as exc_info,
+    ):
+        client.login("someone", "password123")
+    return exc_info.value
+
+
+def _rejected(header: dict[str, object]) -> LoginRejectedError:
+    err = _identify_error(header)
+    assert isinstance(err, LoginRejectedError)
+    return err
+
+
+@pytest.mark.parametrize(
+    ("code", "message", "hint"),
+    [
+        (113, "Please use a valid email address.", "Accounts that sign in with a username"),
+        (207, "Please enter a valid username.", "If this account signs in with a username"),
+    ],
+)
+def test_login_rejection_username_codes(code: int, message: str, hint: str) -> None:
+    error = {"code": code, "message": message}
+    err = _rejected({"csrf": "token-2", "authLevel": "NONE", "success": False, "errors": [error]})
+    assert err.errors == (error,)  # passed through as sent
+    assert err.codes == (str(code),)
+    assert str(err).startswith(f"Empower rejected the sign-in ({code}: {message}).")
+    assert hint in str(err)
+    assert "issues/9" in str(err)
+    assert "rate-limited" not in str(err)
+
+
+def test_login_rejection_other_code_has_no_username_hint() -> None:
+    err = _rejected(
+        {
+            "csrf": "token-2",
+            "authLevel": "NONE",
+            "errors": [{"code": 910, "message": "Username not found."}],
+        }
+    )
+    assert "910: Username not found." in str(err)
+    assert "username instead of an email" not in str(err)
+
+
+def test_login_rejection_carries_redirect_urls() -> None:
+    err = _rejected(
+        {
+            "csrf": "token-2",
+            "authLevel": "NONE",
+            "errors": [{"code": 920, "message": "Your experience has moved."}],
+            "loginURL": "https://login.example.test/",
+            "destinationURL": "https://dest.example.test/",
+        }
+    )
+    assert err.login_url == "https://login.example.test/"
+    assert err.destination_url == "https://dest.example.test/"
+    assert "https://login.example.test/" in str(err)
+    assert "https://dest.example.test/" in str(err)
+
+
+def test_login_urls_without_errors_are_not_a_rejection() -> None:
+    """A URL alone isn't a reason; it stays a plain error but keeps the URL in the text."""
+    err = _identify_error({"csrf": "token-2", "authLevel": "NONE", "loginURL": "https://x.test/"})
+    assert type(err) is EmpowerAuthError
+    assert "rate-limited" in str(err)
+    assert "https://x.test/" in str(err)
+
+
+def test_login_rejection_with_missing_csrf() -> None:
+    err = _rejected(
+        {"authLevel": "NONE", "errors": [{"code": 113, "message": "Please use a valid email."}]}
+    )
+    assert err.codes == ("113",)
+    assert "no CSRF" not in str(err)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": 201, "message": "Session not authenticated."},
+        {"code": 999, "message": "Session expired"},
+        # Verbatim wording from issue #4.
+        {"message": "Session is no longer valid. Please return to the login screen."},
+    ],
+)
+def test_login_session_error_is_not_a_rejection(error: dict[str, object]) -> None:
+    """Stale-cookie errors stay plain EmpowerAuthError so the stale-session retry applies,
+    and the message still carries what Empower said."""
+    err = _identify_error({"csrf": "token-2", "authLevel": "NONE", "errors": [error]})
+    assert type(err) is EmpowerAuthError
+    assert f"Empower said: {_describe(error)}" in str(err)
+
+
+def _describe(error: dict[str, object]) -> str:
+    code, message = error.get("code"), error.get("message")
+    return f"{code}: {message}" if code is not None else str(message)
+
+
+def test_is_auth_error_matches_issue_4_wording() -> None:
+    from personalcapital2.client import _is_auth_error
+
+    assert _is_auth_error({}, "Session is no longer valid. Please return to the login screen.")
+
+
+@pytest.mark.parametrize(
+    ("errors", "expected"),
+    [
+        ([{"message": "No code given."}], "(No code given.)"),
+        ([{"code": 5}], "(code 5)"),
+        ([None, {}, {"code": 7, "message": "x"}], "(7: x)"),
+    ],
+)
+def test_login_rejection_tolerates_odd_error_entries(errors: object, expected: str) -> None:
+    err = _rejected({"csrf": "token-2", "authLevel": "NONE", "errors": errors})
+    assert expected in str(err)
+    assert "None" not in str(err)
+
+
+@pytest.mark.parametrize("errors", ["oops", [{}], [{"code": None, "message": ""}]])
+def test_login_errors_without_content_fall_back_to_generic_message(errors: object) -> None:
+    err = _identify_error({"csrf": "token-2", "authLevel": "NONE", "errors": errors})
+    assert type(err) is EmpowerAuthError
+    assert "rate-limited" in str(err)
+    assert "Empower said" not in str(err)
+
+
+def test_login_rejected_error_pickles() -> None:
+    err = LoginRejectedError(
+        "Empower rejected the sign-in (113: x).",
+        errors=({"code": 113},),
+        login_url="https://x.test/",
+    )
+    restored = pickle.loads(pickle.dumps(err))  # noqa: S301 — round-trips our own object
+    assert isinstance(restored, LoginRejectedError)
+    assert str(restored) == str(err)
+    assert restored.errors == err.errors
+    assert restored.login_url == "https://x.test/"
+
+
+def test_authenticate_rejection_keeps_session_and_does_not_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: a rejection at identifyUser with a cached session present must not
+    delete the session file or call identifyUser a second time."""
+    from personalcapital2.auth import authenticate
+
+    session_path = tmp_path / "session.json"
+    session_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "csrf": "cached-csrf",
+                "cookies": [{"name": "JSESSIONID", "value": "x", "domain": "pc-api.test"}],
+            }
+        )
+    )
+    session_path.chmod(0o600)
+    monkeypatch.setenv("EMPOWER_EMAIL", "someone")
+    monkeypatch.setenv("EMPOWER_PASSWORD", "password123")
+
+    csrf_page = _mock_response(text="window.csrf='aaa-111-bbb'")
+    identify_resp = _mock_response(
+        json_data={
+            "spHeader": {
+                "csrf": "token-2",
+                "authLevel": "NONE",
+                "errors": [{"code": 113, "message": "Please use a valid email address."}],
+            }
+        }
+    )
+    with (
+        patch("requests.Session.request", side_effect=[csrf_page, identify_resp]) as request,
+        pytest.raises(LoginRejectedError),
+    ):
+        authenticate(session_path)
+
+    assert session_path.exists()
+    identify_calls = [c for c in request.call_args_list if "identifyUser" in str(c)]
+    assert len(identify_calls) == 1
+
+
+def test_authenticate_session_error_at_identify_still_clears_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: a session error (201) at identifyUser with a cached session present is
+    a stale session, so the file is deleted and the login retried once."""
+    from personalcapital2.auth import authenticate
+
+    session_path = tmp_path / "session.json"
+    session_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "csrf": "cached-csrf",
+                "cookies": [{"name": "JSESSIONID", "value": "x", "domain": "pc-api.test"}],
+            }
+        )
+    )
+    session_path.chmod(0o600)
+    monkeypatch.setenv("EMPOWER_EMAIL", "someone")
+    monkeypatch.setenv("EMPOWER_PASSWORD", "password123")
+
+    def identify(header: dict[str, object]) -> MagicMock:
+        return _mock_response(json_data={"spHeader": header})
+
+    stale: dict[str, object] = {
+        "csrf": "token-2",
+        "authLevel": "NONE",
+        "errors": [{"code": 201, "message": "Session not authenticated."}],
+    }
+    # The retry gets a rejection, which ends the test with a distinct error type.
+    rejected: dict[str, object] = {
+        "csrf": "token-3",
+        "authLevel": "NONE",
+        "errors": [{"code": 910}],
+    }
+    page = "window.csrf='aaa-111-bbb'"
+    responses = [
+        _mock_response(text=page),
+        identify(stale),
+        _mock_response(text=page),
+        identify(rejected),
+    ]
+    with (
+        patch("requests.Session.request", side_effect=responses) as request,
+        pytest.raises(LoginRejectedError),
+    ):
+        authenticate(session_path)
+
+    assert not session_path.exists()
+    identify_calls = [c for c in request.call_args_list if "identifyUser" in str(c)]
+    assert len(identify_calls) == 2
+
+
+def _password_error(errors: list[dict[str, object]]) -> EmpowerAuthError:
+    """Run login() to a rejected authenticatePassword and return the raised error."""
+    client = EmpowerClient()
+    responses = [
+        _mock_response(text="window.csrf='aaa-111-bbb'"),
+        _mock_response(json_data={"spHeader": {"csrf": "t2", "authLevel": "USER_REMEMBERED"}}),
+        _mock_response(json_data={"spHeader": {"success": False, "errors": errors}}),
+    ]
+    with (
+        patch.object(client._session, "request", side_effect=responses),
+        pytest.raises(EmpowerAuthError) as exc_info,
+    ):
+        client.login("user@example.com", "wrong")
+    return exc_info.value
+
+
+def test_login_wrong_password_is_a_rejection() -> None:
+    # Message as Empower sent it in a live wrong-password login.
+    err = _password_error([{"message": "Incorrect password entered."}])
+    assert isinstance(err, LoginRejectedError)
+    assert str(err) == "Empower rejected the sign-in (Incorrect password entered.)."
+
+
+def test_login_session_error_at_password_step_stays_retryable() -> None:
+    """Issue #4: stale cookies surface at authenticatePassword; that must stay retryable."""
+    err = _password_error(
+        [{"message": "Session is no longer valid. Please return to the login screen."}]
+    )
+    assert type(err) is EmpowerAuthError
+
+
+def test_authenticate_wrong_password_keeps_session_and_does_not_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end, as seen live: remembered device + wrong password must not delete the
+    session file (losing the remembered device) or retry (a second failed attempt + SMS)."""
+    from personalcapital2.auth import authenticate
+
+    session_path = tmp_path / "session.json"
+    session_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "csrf": "cached-csrf",
+                "cookies": [{"name": "JSESSIONID", "value": "x", "domain": "pc-api.test"}],
+            }
+        )
+    )
+    session_path.chmod(0o600)
+    monkeypatch.setenv("EMPOWER_EMAIL", "user@example.com")
+    monkeypatch.setenv("EMPOWER_PASSWORD", "wrong")
+
+    responses = [
+        _mock_response(text="window.csrf='aaa-111-bbb'"),
+        _mock_response(json_data={"spHeader": {"csrf": "t2", "authLevel": "USER_REMEMBERED"}}),
+        _mock_response(
+            json_data={
+                "spHeader": {
+                    "success": False,
+                    "errors": [{"message": "Incorrect password entered."}],
+                }
+            }
+        ),
+    ]
+    with (
+        patch("requests.Session.request", side_effect=responses) as request,
+        pytest.raises(LoginRejectedError),
+    ):
+        authenticate(session_path)
+
+    assert session_path.exists()
+    password_calls = [c for c in request.call_args_list if "authenticatePassword" in str(c)]
+    assert len(password_calls) == 1
 
 
 def test_login_raises_on_missing_csrf() -> None:

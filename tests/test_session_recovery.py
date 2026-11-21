@@ -14,6 +14,7 @@ from personalcapital2.auth import authenticate, run_authenticated
 from personalcapital2.exceptions import (
     EmpowerAuthError,
     InteractiveAuthRequired,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.types import TwoFactorMode
@@ -28,14 +29,17 @@ if TYPE_CHECKING:
 def test_public_api_imports() -> None:
     """Documented exports are importable from the package root."""
     from personalcapital2 import (
+        EmpowerAuthError,
         EmpowerNetworkError,
         InteractiveAuthRequired,
+        LoginRejectedError,
         run_authenticated,
     )
 
     assert run_authenticated is not None
     assert EmpowerNetworkError is not None
     assert InteractiveAuthRequired is not None
+    assert issubclass(LoginRejectedError, EmpowerAuthError)
 
 
 # --- Test fixtures: configurable FakeClient ---
@@ -224,6 +228,32 @@ def test_authenticate_non_tty_email_prompt(
         authenticate(session_path)
 
 
+def test_cli_non_tty_error_is_its_own_stderr_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The "Email: " prompt left open by EOF must not share a line with the JSON error,
+    so agents can parse stderr's last line."""
+    import json
+
+    from personalcapital2.cli import main
+
+    monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
+    monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
+
+    def raise_eof(_prompt: str = "") -> str:
+        raise EOFError
+
+    _patch_input(monkeypatch, raise_eof)
+
+    with pytest.raises(SystemExit):
+        main(["--session", str(tmp_path / "session.json"), "login"])
+
+    last_line = capsys.readouterr().err.rstrip("\n").splitlines()[-1]
+    assert json.loads(last_line)["type"] == "EmpowerAuthError"
+
+
 # --- 5. Non-TTY, no mode set → defaults to SMS; session preserved ---
 
 
@@ -321,6 +351,30 @@ def test_run_authenticated_recovers_from_stale_fetch(
     assert result == "ok"
     assert op_calls["n"] == 2
     assert auth_calls["n"] == 1
+
+
+def test_run_authenticated_propagates_login_rejection(
+    tmp_path: Path,
+    env_creds: None,
+) -> None:
+    """A stale fetch triggers re-auth; if Empower rejects that sign-in, the rejection
+    propagates, the operation is not run again, and the session file is kept."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text("{}")
+    _FakeClient.login_recipe = [LoginRejectedError("Empower rejected the sign-in (113: x).")]
+
+    op_calls = {"n": 0}
+
+    def operation(client: Any) -> str:
+        op_calls["n"] += 1
+        raise EmpowerAuthError("Session not authenticated")
+
+    with pytest.raises(LoginRejectedError):
+        run_authenticated(operation, session_path)
+
+    assert op_calls["n"] == 1
+    assert session_path.exists()
+    assert sum(c.login_calls for c in _FakeClient.instances) == 1
 
 
 # --- 8. run_authenticated propagates InteractiveAuthRequired from authenticate ---

@@ -19,6 +19,7 @@ import json
 import re
 import sys
 from datetime import date, timedelta
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, cast
@@ -35,6 +36,7 @@ from personalcapital2.exceptions import (
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    LoginRejectedError,
 )
 
 _VERSION = _pkg_version("personalcapital2")
@@ -376,15 +378,35 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
         sys.stdout.write(json.dumps(output, default=_json_default, indent=2) + "\n")
 
 
+_MCP_MIN_VERSION = (2, 1)
+
+
 def cmd_mcp(args: argparse.Namespace) -> None:
     """Start the MCP tool server (stdio transport)."""
     try:
         from personalcapital2 import mcp_server
-    except ImportError:
+    except ImportError as exc:
+        # Upgrading personalcapital2 without the [mcp] extra leaves an older mcp
+        # installed, which fails this import the same way a missing one does.
+        try:
+            installed = _pkg_version("mcp")
+        except PackageNotFoundError:
+            _error(
+                "MCP support requires the [mcp] extra.",
+                "ImportError",
+                EXIT_USAGE,
+                suggestion="pip install 'personalcapital2[mcp]'",
+            )
+        match = re.match(r"(\d+)\.(\d+)", installed)
+        if match and (int(match[1]), int(match[2])) < _MCP_MIN_VERSION:
+            message = f"MCP support needs mcp>=2.1, but mcp {installed} is installed."
+        else:
+            message = f"Could not load the MCP server with mcp {installed}: {exc}"
         _error(
-            "MCP support requires the [mcp] extra: pip install personalcapital2[mcp]",
+            message,
             "ImportError",
             EXIT_USAGE,
+            suggestion="pip install -U 'personalcapital2[mcp]'",
         )
     session_path = Path(args.session)
     server = mcp_server.create_server(session_path=session_path)
@@ -742,7 +764,7 @@ client config (Claude Code / Claude Desktop):
 def _unwrap_singleton_group(exc: BaseException) -> BaseException:
     """Strip nested singleton BaseExceptionGroup wrappers to expose the real cause.
 
-    FastMCP's lifespan runs under an anyio TaskGroup, which wraps any startup
+    The MCP server's lifespan runs under an anyio TaskGroup, which wraps any startup
     exception in a BaseExceptionGroup. Without this, ``pc2 mcp`` failures
     surface as a useless ``"unhandled errors in a TaskGroup (1 sub-exception)"``
     message and exit code 4, instead of the underlying typed error.
@@ -775,11 +797,15 @@ def main(argv: list[str] | None = None) -> None:
         except BaseExceptionGroup as eg:
             # Re-raise the singleton inner exception so the typed-handler chain
             # below dispatches on the real cause (e.g. EmpowerAuthError from a
-            # FastMCP lifespan), not the opaque group wrapper.
+            # MCP server lifespan), not the opaque group wrapper.
             cause = _unwrap_singleton_group(eg)
             if cause is eg:
                 raise
             raise cause from eg
+    except LoginRejectedError as e:
+        # No suggestion: the message carries Empower's own reason, and logging in
+        # again with the same identity fails the same way.
+        _error(str(e), "LoginRejectedError", EXIT_AUTH)
     except EmpowerAuthError as e:
         _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion="pc2 login")
     except EmpowerNetworkError as e:

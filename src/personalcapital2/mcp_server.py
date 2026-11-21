@@ -1,7 +1,7 @@
 """MCP tool server for Empower (Personal Capital) financial data.
 
 Exposes EmpowerClient methods as MCP tools over stdio transport.
-Requires the ``mcp`` optional extra: ``pip install personalcapital2[mcp]``
+Requires the ``mcp`` optional extra: ``pip install "personalcapital2[mcp]"``
 
 Usage:
     pc2 mcp              # start server (cold start OK — agent can bootstrap
@@ -36,6 +36,7 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from datetime import date
 from functools import wraps
+from importlib.metadata import version as _package_version
 from pathlib import Path  # noqa: TC003 — needed at runtime by lifespan
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -43,7 +44,7 @@ import requests
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 
 from personalcapital2._serialization import serialize_result
 from personalcapital2.auth import parse_2fa_mode_env
@@ -52,6 +53,7 @@ from personalcapital2.exceptions import (
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.types import TwoFactorMode
@@ -70,7 +72,7 @@ class _AppContext:
     pending_2fa_mode: TwoFactorMode | None = None
 
 
-def _get_client(ctx: Context) -> EmpowerClient:
+def _get_client(ctx: Context[_AppContext]) -> EmpowerClient:
     """Extract the EmpowerClient from the MCP context.
 
     Reloads the session from disk on each call so the long-running server
@@ -239,11 +241,18 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
             # path bypasses _request().
             log.warning("Unwrapped network error in tool call: %s", exc)
             return f"Error: Network request failed — {exc}"
+        except ValueError as exc:
+            # The response validators raise ValueError when the API's response
+            # shape drifts. Since mcp 2.1, an exception that escapes a tool
+            # reaches the model only as "Error executing tool <name>", so
+            # surface the detail here.
+            log.warning("Unexpected API response in tool call: %s", exc)
+            return f"Error: unexpected API response — {exc}"
 
     return wrapper
 
 
-def start_authentication(ctx: Context) -> str:
+def start_authentication(ctx: Context[_AppContext]) -> str:
     """Re-authenticate when the cached session is stale.
 
     Reads EMPOWER_EMAIL and EMPOWER_PASSWORD from the MCP server's
@@ -300,6 +309,9 @@ def start_authentication(ctx: Context) -> str:
         )
     except EmpowerNetworkError as exc:
         return f"Error: network failure during login — {exc}. Check connection and try again."
+    except LoginRejectedError as exc:
+        # Message starts "Empower rejected the sign-in", distinct from transient failures.
+        return f"Error: {exc}"
     except (EmpowerAuthError, EmpowerAPIError) as exc:
         return f"Error: authentication failed: {exc}"
 
@@ -313,7 +325,7 @@ def start_authentication(ctx: Context) -> str:
     return "Authenticated."
 
 
-def complete_authentication(ctx: Context, code: str) -> str:
+def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
     """Submit the 2FA verification code to complete authentication.
 
     Call this after start_authentication has dispatched a 2FA challenge.
@@ -339,17 +351,22 @@ def complete_authentication(ctx: Context, code: str) -> str:
             f"Error: network failure during 2FA verification — {exc}. "
             "Try complete_authentication again."
         )
+    except LoginRejectedError as exc:
+        # The code was accepted but Empower rejected the password.
+        app_ctx.pending_2fa_mode = None
+        return f"Error: {exc}"
     except (EmpowerAuthError, EmpowerAPIError) as exc:
         # Wrong code or server rejection — clear state so the agent can
-        # restart cleanly via start_authentication.
+        # restart cleanly via start_authentication. The client's message
+        # already starts "2FA verification failed: ...".
         app_ctx.pending_2fa_mode = None
-        return f"Error: 2FA verification failed: {exc}"
+        return f"Error: {str(exc).rstrip('.')}. Call start_authentication to send a new code."
     app_ctx.pending_2fa_mode = None
     app_ctx.client.save_session()
     return "Authenticated."
 
 
-def create_server(session_path: Path | None = None) -> FastMCP:
+def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
     """Create and return a configured MCP server.
 
     Args:
@@ -358,7 +375,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     resolved_path = session_path or DEFAULT_SESSION_PATH
 
     @asynccontextmanager
-    async def lifespan(server: FastMCP) -> AsyncIterator[_AppContext]:
+    async def lifespan(server: MCPServer[_AppContext]) -> AsyncIterator[_AppContext]:
         # No-session is OK at startup — agents bootstrap via start_authentication.
         # EmpowerClient's constructor calls load_session() which is a no-op for
         # missing files (client.py:522), so the unauthenticated client is safe
@@ -373,8 +390,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
         client = EmpowerClient(session_path=resolved_path)
         yield _AppContext(client=client, session_path=resolved_path)
 
-    mcp = FastMCP(
+    mcp = MCPServer(
         name="empower",
+        version=_package_version("personalcapital2"),
         lifespan=lifespan,
     )
 
@@ -396,14 +414,14 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     # --- Tools ---
     #
     # All tools are synchronous functions calling the requests-based EmpowerClient.
-    # FastMCP runs sync tools in a thread pool, so they won't block the event loop.
+    # MCPServer runs sync tools in a worker thread, so they won't block the event loop.
     #
     # All tools use structured_output=False to avoid generating outputSchema,
     # which causes Claude Code to silently drop all tools (anthropics/claude-code#25081).
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_accounts(ctx: Context) -> str:
+    def get_accounts(ctx: Context[_AppContext]) -> str:
         """List all linked financial accounts with aggregate summary.
 
         Returns accounts with balances, types, and firm names, plus a summary
@@ -420,7 +438,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_transactions(ctx: Context, start_date: date, end_date: date, limit: int = 100) -> str:
+    def get_transactions(
+        ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 100
+    ) -> str:
         """Fetch transactions within a date range.
 
         Returns transactions with amounts, descriptions, categories, and merchant info,
@@ -451,7 +471,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_holdings(ctx: Context, limit: int = 100) -> str:
+    def get_holdings(ctx: Context[_AppContext], limit: int = 100) -> str:
         """Fetch current investment holdings across all accounts.
 
         Returns individual holdings with security info, quantities, prices,
@@ -476,7 +496,9 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_net_worth(ctx: Context, start_date: date, end_date: date, limit: int = 180) -> str:
+    def get_net_worth(
+        ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 180
+    ) -> str:
         """Fetch daily net worth history with change summary.
 
         Returns daily net worth entries broken down by asset/liability category,
@@ -508,7 +530,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
     def get_account_balances(
-        ctx: Context, start_date: date, end_date: date, limit: int = 500
+        ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 500
     ) -> str:
         """Fetch daily account balance history for all accounts.
 
@@ -541,7 +563,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
     def get_performance(
-        ctx: Context,
+        ctx: Context[_AppContext],
         start_date: date,
         end_date: date,
         account_ids: list[int],
@@ -584,7 +606,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
-    def get_quotes(ctx: Context, start_date: date, end_date: date) -> str:
+    def get_quotes(ctx: Context[_AppContext], start_date: date, end_date: date) -> str:
         """Fetch portfolio vs S&P 500 comparison, portfolio snapshot, and market quotes.
 
         Returns daily portfolio vs benchmark values, a current portfolio snapshot
@@ -608,7 +630,7 @@ def create_server(session_path: Path | None = None) -> FastMCP:
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
     def get_spending(
-        ctx: Context,
+        ctx: Context[_AppContext],
         start_date: date | None = None,
         end_date: date | None = None,
         interval: Literal["MONTH", "WEEK", "YEAR"] = "MONTH",

@@ -16,6 +16,7 @@ from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
 from personalcapital2.exceptions import (
     EmpowerAuthError,
     InteractiveAuthRequired,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.types import TwoFactorMode
@@ -34,6 +35,13 @@ def _prompt(message: str) -> str:
     sys.stderr.write(message)
     sys.stderr.flush()
     return input()
+
+
+def _end_prompt_line() -> None:
+    """Finish a prompt line left open by EOF, so the next stderr write (the CLI's
+    JSON error) starts on its own line."""
+    sys.stderr.write("\n")
+    sys.stderr.flush()
 
 
 def parse_2fa_mode_env(value: str) -> TwoFactorMode:
@@ -63,6 +71,7 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
     is wrapped in a one-shot retry: if the cached session is stale, it's
     deleted and the flow runs again with a fresh client. ``verify_2fa_and_login``
     runs OUTSIDE the retry — a wrong code shouldn't nuke the cached session.
+    A ``LoginRejectedError`` is not retried and leaves the cached session alone.
 
     Args:
         session_path: Path to persist session cookies.
@@ -73,12 +82,14 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
     Raises:
         InteractiveAuthRequired: if a credential or 2FA prompt would block on
             EOFError (non-TTY).
+        LoginRejectedError: if Empower rejects the username or password and says why.
         EmpowerAuthError: if login fails for credential or server reasons.
     """
     try:
         email = os.getenv("EMPOWER_EMAIL") or _prompt("Email: ")
         password = os.getenv("EMPOWER_PASSWORD") or getpass.getpass("Password: ", stream=sys.stderr)
     except EOFError:
+        _end_prompt_line()
         raise InteractiveAuthRequired(
             "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
         ) from None
@@ -115,10 +126,11 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
 
     try:
         client, mode = _login_and_maybe_challenge()
-    except InteractiveAuthRequired:
-        # InteractiveAuthRequired subclasses EmpowerAuthError; catch it first so
-        # a "no TTY" signal is never mistaken for stale cookies and never
-        # triggers a session unlink. Re-raise as-is, preserving the cached session.
+    except (InteractiveAuthRequired, LoginRejectedError):
+        # Both subclass EmpowerAuthError; catch them first so neither is mistaken
+        # for stale cookies. "No TTY" and "Empower rejected these credentials" are
+        # not session problems: re-raise as-is, keeping the cached session and
+        # not calling identifyUser again.
         raise
     except EmpowerAuthError:
         # Stale cached cookies. Clear and retry once with a fresh client.
@@ -137,6 +149,7 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
         try:
             code = _prompt("Enter verification code: ")
         except EOFError:
+            _end_prompt_line()
             raise InteractiveAuthRequired(
                 "2FA verification cannot complete without an interactive terminal."
             ) from None
@@ -176,6 +189,8 @@ def run_authenticated[T](
 
     Raises:
         TwoFactorRequiredError: re-raised without retry (control-flow signal).
+        LoginRejectedError: if re-authentication is rejected by Empower (the
+            operation is not run again).
         EmpowerAuthError: if re-authentication fails or the retried operation
             also fails.
     """

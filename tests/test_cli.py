@@ -1119,6 +1119,28 @@ def test_cmd_login(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert parsed["session_path"] == str(session)
 
 
+@pytest.mark.parametrize("code", [113, 207, 910])
+def test_cmd_login_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str], code: int) -> None:
+    """LoginRejectedError gets its own type and no `pc2 login` suggestion: the message
+    carries Empower's reason, and logging in again with the same identity fails the same way."""
+    from personalcapital2.exceptions import LoginRejectedError
+
+    with (
+        patch("personalcapital2.cli.authenticate") as mock_auth,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        mock_auth.side_effect = LoginRejectedError(
+            f"Empower rejected the sign-in ({code}: x).", errors=({"code": code, "message": "x"},)
+        )
+        main(["--session", str(tmp_path / "session.json"), "login"])
+
+    assert exc_info.value.code == EXIT_AUTH
+    err = json.loads(capsys.readouterr().err)
+    assert err["type"] == "LoginRejectedError"
+    assert err["error"].startswith("Empower rejected the sign-in")
+    assert "suggestion" not in err
+
+
 def test_cmd_login_not_tty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Non-TTY login: authenticate() raises InteractiveAuthRequired (subclass of
     EmpowerAuthError) → main() emits structured JSON via _error()."""
@@ -1376,7 +1398,7 @@ def test_data_command_recovers_from_stale_session(
 def test_singleton_exception_group_is_unwrapped(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """FastMCP's anyio TaskGroup wraps lifespan errors in BaseExceptionGroup.
+    """The MCP server's anyio TaskGroup wraps lifespan errors in BaseExceptionGroup.
     Without unwrapping, ``pc2 mcp`` failures surface as a useless 'unhandled
     errors in a TaskGroup' message at exit code 4. After unwrapping, the
     inner typed exception flows through the existing handler chain."""
@@ -1424,3 +1446,52 @@ def test_multi_exception_group_is_not_unwrapped(
     # branch with EXIT_UNEXPECTED.
     assert exc_info.value.code != EXIT_AUTH
     assert exc_info.value.code != EXIT_NETWORK
+
+
+# --- pc2 mcp import failures ---
+
+
+@pytest.mark.parametrize(
+    ("installed", "expected_error", "expected_suggestion"),
+    [
+        # No mcp at all.
+        (None, "requires the [mcp] extra", "pip install 'personalcapital2[mcp]'"),
+        # An older mcp left behind by upgrading without the extra.
+        ("1.27.0", "needs mcp>=2.1, but mcp 1.27.0", "pip install -U 'personalcapital2[mcp]'"),
+        # A new-enough mcp that still fails: show the underlying import error.
+        ("2.3.0", "personalcapital2.mcp_server", "pip install -U 'personalcapital2[mcp]'"),
+    ],
+)
+def test_mcp_import_failure(
+    installed: str | None,
+    expected_error: str,
+    expected_suggestion: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from importlib.metadata import PackageNotFoundError
+
+    import personalcapital2
+
+    def fake_version(name: str) -> str:
+        assert name == "mcp"
+        if installed is None:
+            raise PackageNotFoundError(name)
+        return installed
+
+    # `from personalcapital2 import mcp_server` returns the package attribute if
+    # another test already imported the module, bypassing sys.modules below.
+    monkeypatch.delattr(personalcapital2, "mcp_server", raising=False)
+    with (
+        # A None entry in sys.modules makes the import raise ImportError.
+        patch.dict("sys.modules", {"personalcapital2.mcp_server": None}),
+        patch("personalcapital2.cli._pkg_version", fake_version),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main(["mcp"])
+
+    assert exc_info.value.code == EXIT_USAGE
+    err = json.loads(capsys.readouterr().err)
+    assert err["type"] == "ImportError"
+    assert expected_error in err["error"]
+    assert err["suggestion"] == expected_suggestion

@@ -106,10 +106,12 @@ All fields use `datetime.date` and `decimal.Decimal`. See the [API Reference](do
 An MCP tool server gives AI agents (Claude Code, Claude Desktop, etc.) direct access to your financial data. The agent can call tools like `get_transactions` or `get_holdings` and reason over the results.
 
 ```bash
-pip install "personalcapital2[mcp]"
+uv tool install "personalcapital2[mcp]"   # or: pip install "personalcapital2[mcp]"
 pc2 login   # authenticate first
 pc2 mcp     # start the server
 ```
+
+The `[mcp]` extra needs `mcp>=2.1`. When upgrading from 0.4.x, upgrade the extra too: `uv tool upgrade personalcapital2` or `pip install -U "personalcapital2[mcp]"`.
 
 Client config (Claude Code / Claude Desktop):
 
@@ -145,4 +147,5 @@ This library uses Empower's unofficial internal web API, which is not affiliated
 - **`get_accounts` may not list all accounts with holdings.** Some accounts (employer 401k plans, crypto exchanges) can appear in `get_holdings`, `get_account_balances`, and `get_performance` but not in `get_accounts`. Use `get_holdings` to discover investment account IDs.
 - **Fee fields can be `NaN`.** The API returns `"NaN"` for `fees_per_year`, `fund_fees`, `total_fee`, and `advisory_fee_percentage` on some investment accounts (401k plans, crypto, RSUs). These are coerced to `None` — the account is not dropped.
 - **`get_spending` ignores date range and interval.** The API always returns current-period spending for all three interval types (MONTH, WEEK, YEAR), regardless of the `start_date`, `end_date`, or `interval` parameters.
+- **Only email-address logins are supported.** Accounts that sign in with a username get `LoginRejectedError` with Empower's code (113 or 207). Those accounts go through Empower's newer login, which this library doesn't support yet ([#9](https://github.com/wpwilson10/personalcapital2/issues/9)).
 - **Sessions expire.** Typically ~24 hours, sometimes sooner. CLI users run `pc2 login` again; MCP users let the agent call `start_authentication` / `complete_authentication`. Stale-session recovery handles this automatically when `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` are set.

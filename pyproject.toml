@@ -1,6 +1,6 @@
 [project]
 name = "personalcapital2"
-version = "0.4.0"
+version = "0.5.0"
 description = "Python client for the Empower (Personal Capital) unofficial API"
 readme = "README.md"
 license = "MIT"
@@ -13,6 +13,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Office/Business :: Financial",
     "Typing :: Typed",
 ]
@@ -21,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0,<2.0"]
+mcp = ["mcp>=2.1,<3.0"]
 
 [project.urls]
 Repository = "https://github.com/wpwilson10/personalcapital2"
@@ -38,7 +40,7 @@ dev = [
 
     "pre-commit>=4.0",
     "responses>=0.25",
-    "mcp>=1.0,<2.0",
+    "mcp>=2.1,<3.0",
     "anyio[pytest]>=4.0",
 ]
 
@@ -48,7 +50,9 @@ pythonVersion = "3.12"
 reportUnnecessaryTypeIgnoreComment = true
 exclude = ["scripts", ".venv"]
 
-# mcp SDK (mcp>=1.0) has incomplete type stubs — revisit when SDK types improve
+# Relaxed checks for the MCP server. Tools are nested in create_server, hence
+# reportUnusedFunction. The other relaxations date from mcp 1.x and may no
+# longer be needed under mcp 2.x.
 [[tool.pyright.executionEnvironments]]
 root = "src/personalcapital2/mcp_server.py"
 reportUnknownMemberType = false

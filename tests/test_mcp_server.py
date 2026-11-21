@@ -20,6 +20,7 @@ from personalcapital2.exceptions import (  # noqa: E402
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.mcp_server import (  # noqa: E402
@@ -347,8 +348,13 @@ async def _call_tool(
     *,
     mock_client: MagicMock | None = None,
 ) -> str:
-    """Call a tool via in-memory MCP transport and return the text content."""
-    from mcp.shared.memory import create_connected_server_and_client_session
+    """Call a tool via in-memory MCP transport and return the text content.
+
+    ``mode="legacy"`` runs the in-memory JSON-RPC streams and initialize
+    handshake, matching what a stdio client exercises. The default ``"auto"``
+    mode dispatches directly and skips both.
+    """
+    from mcp import Client
 
     if mock_client:
         ctx = patch("personalcapital2.mcp_server.EmpowerClient", return_value=mock_client)
@@ -356,11 +362,9 @@ async def _call_tool(
         ctx = patch("personalcapital2.mcp_server.EmpowerClient")
 
     with ctx:
-        async with create_connected_server_and_client_session(
-            server._mcp_server,
-        ) as client_session:
-            result = await client_session.call_tool(name, arguments or {})
-    assert not result.isError, f"Tool {name} returned error: {result.content}"
+        async with Client(server, mode="legacy") as client:
+            result = await client.call_tool(name, arguments or {})
+    assert not result.is_error, f"Tool {name} returned error: {result.content}"
     assert len(result.content) > 0
     text_block = result.content[0]
     assert text_block.type == "text"
@@ -561,6 +565,16 @@ async def test_empower_network_error_returns_message(server: Any, mock_client: M
     assert "Check connection and retry" in text
 
 
+async def test_value_error_returns_message(server: Any, mock_client: MagicMock) -> None:
+    """Response-shape drift (ValueError from the validators) must reach the
+    model with its detail. Since mcp 2.1 an escaping exception arrives only as
+    'Error executing tool <name>'."""
+    mock_client.get_accounts.side_effect = ValueError("missing field 'accounts'")
+    text = await _call_tool(server, "get_accounts", mock_client=mock_client)
+    assert text.startswith("Error: unexpected API response")
+    assert "missing field 'accounts'" in text
+
+
 # --- Date validation tests ---
 
 
@@ -606,10 +620,10 @@ async def test_missing_session_file_starts_with_warning(
     missing = tmp_path / "nonexistent.json"
     srv = create_server(session_path=missing)
 
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp import Client
 
     with caplog.at_level(logging.WARNING, logger="personalcapital2.mcp_server"):
-        async with create_connected_server_and_client_session(srv._mcp_server):
+        async with Client(srv, mode="legacy"):
             pass
 
     messages = [r.getMessage() for r in caplog.records]
@@ -628,14 +642,14 @@ async def test_missing_session_file_data_tool_directs_agent_to_start_authenticat
     # Real EmpowerClient against a missing session — get_accounts will hit
     # the API and fail with EmpowerAuthError, which _handle_tool_errors then
     # rewrites to the agent-friendly message.
-    from mcp.shared.memory import create_connected_server_and_client_session
+    from mcp import Client
 
     fake_client = MagicMock()
     fake_client.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
 
     with patch("personalcapital2.mcp_server.EmpowerClient", return_value=fake_client):
-        async with create_connected_server_and_client_session(srv._mcp_server) as session:
-            result = await session.call_tool("get_accounts", {})
+        async with Client(srv, mode="legacy") as client:
+            result = await client.call_tool("get_accounts", {})
 
     assert len(result.content) > 0
     text = result.content[0].text  # type: ignore[union-attr]  # text content has .text
@@ -648,10 +662,15 @@ async def test_missing_session_file_data_tool_directs_agent_to_start_authenticat
 
 
 async def test_tools_have_no_output_schema(server: Any) -> None:
-    """Verify no tools have outputSchema (would break Claude Code)."""
+    """Verify no tool advertises outputSchema (would break Claude Code,
+    anthropics/claude-code#25081). Checks the wire form (camelCase aliases)
+    so the test can't pass just because an attribute name changed."""
     tools = await server.list_tools()
+    assert tools
     for tool in tools:
-        assert tool.outputSchema is None, f"Tool {tool.name} has outputSchema set"
+        wire = tool.model_dump(by_alias=True, exclude_none=True)
+        assert "inputSchema" in wire, f"Tool {tool.name}: unexpected wire shape {wire}"
+        assert "outputSchema" not in wire, f"Tool {tool.name} has outputSchema set"
 
 
 async def test_tools_have_no_annotations(server: Any) -> None:
@@ -1505,6 +1524,48 @@ def test_complete_authentication_succeeds(
     assert fresh_client.save_session_calls == 1
 
 
+@pytest.mark.parametrize(
+    ("error", "expected_start", "says_new_code"),
+    [
+        (
+            EmpowerAuthError("2FA verification failed: Incorrect verification code entered."),
+            "Error: 2FA verification failed: Incorrect verification code entered. Call",
+            True,
+        ),
+        (
+            LoginRejectedError("Empower rejected the sign-in (Incorrect password entered.)."),
+            "Error: Empower rejected the sign-in (Incorrect password entered.).",
+            False,
+        ),
+    ],
+)
+def test_complete_authentication_failure_messages(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+    error: EmpowerAuthError,
+    expected_start: str,
+    says_new_code: bool,
+) -> None:
+    """A wrong code says once that verification failed and names the next step;
+    a rejected password reads as a rejection. Both clear the pending challenge."""
+    client = _FakeAuthClient(session_path=tmp_path / "session.json")
+    _FakeAuthClient.verify_2fa_recipe = [error]
+    app_ctx = _AppContext(
+        client=client,  # type: ignore[arg-type]
+        session_path=tmp_path / "session.json",
+        pending_2fa_mode=_TwoFactorMode.SMS,
+    )
+
+    result = complete_authentication(_make_ctx(app_ctx), code="0000")
+
+    assert result.startswith(expected_start)
+    assert result.count("2FA verification failed") <= 1
+    assert ".." not in result
+    assert ("Call start_authentication to send a new code." in result) is says_new_code
+    assert app_ctx.pending_2fa_mode is None
+
+
 def test_complete_authentication_no_pending_challenge(
     tmp_path: Path,
     auth_env: None,
@@ -1558,6 +1619,25 @@ def test_start_authentication_keeps_old_client_on_failure(
     assert app_ctx.pending_2fa_mode is None
 
 
+def test_start_authentication_login_rejected(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    """A rejection reads differently from a transient failure, and keeps the old client."""
+    app_ctx = _make_app_ctx(tmp_path)
+    original_client = app_ctx.client
+    _FakeAuthClient.login_recipe = [
+        LoginRejectedError("Empower rejected the sign-in (113: Please use a valid email address.).")
+    ]
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert result.startswith("Error: Empower rejected the sign-in (113:")
+    assert "authentication failed" not in result
+    assert app_ctx.client is original_client
+
+
 def test_start_authentication_no_2fa_clears_pending_mode(
     tmp_path: Path,
     auth_env: None,
@@ -1601,3 +1681,16 @@ def test_get_client_skips_load_session_during_2fa_window(
     app_ctx.pending_2fa_mode = None
     _get_client(ctx)
     assert fresh_client.load_session_calls == 1
+
+
+async def test_server_info_reports_package_version(server: Any) -> None:
+    """mcp 2.x sends an empty serverInfo.version unless one is passed."""
+    from importlib.metadata import version
+
+    from mcp import Client
+
+    async with Client(server, mode="legacy") as client:
+        info = client.server_info
+    assert info is not None
+    assert info.name == "empower"
+    assert info.version == version("personalcapital2")
