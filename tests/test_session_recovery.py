@@ -228,6 +228,32 @@ def test_authenticate_non_tty_email_prompt(
         authenticate(session_path)
 
 
+def test_cli_non_tty_error_is_its_own_stderr_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The "Email: " prompt left open by EOF must not share a line with the JSON error,
+    so agents can parse stderr's last line."""
+    import json
+
+    from personalcapital2.cli import main
+
+    monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
+    monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
+
+    def raise_eof(_prompt: str = "") -> str:
+        raise EOFError
+
+    _patch_input(monkeypatch, raise_eof)
+
+    with pytest.raises(SystemExit):
+        main(["--session", str(tmp_path / "session.json"), "login"])
+
+    last_line = capsys.readouterr().err.rstrip("\n").splitlines()[-1]
+    assert json.loads(last_line)["type"] == "EmpowerAuthError"
+
+
 # --- 5. Non-TTY, no mode set → defaults to SMS; session preserved ---
 
 

@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   messages now include what Empower said.
 - "Session is no longer valid" (Empower's exact wording) is recognised as an
   expired session.
+- Without a terminal, a login prompt that hits end-of-input no longer shares a
+  line with the CLI's JSON error, so the last line of stderr is always valid
+  JSON.
 - Under mcp 2.1+, an unexpected API response shape reaches the agent as a
   readable error instead of "Error executing tool <name>".
 - The MCP server reports the package version in `serverInfo`.

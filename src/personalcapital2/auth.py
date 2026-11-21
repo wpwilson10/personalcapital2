@@ -37,6 +37,13 @@ def _prompt(message: str) -> str:
     return input()
 
 
+def _end_prompt_line() -> None:
+    """Finish a prompt line left open by EOF, so the next stderr write (the CLI's
+    JSON error) starts on its own line."""
+    sys.stderr.write("\n")
+    sys.stderr.flush()
+
+
 def parse_2fa_mode_env(value: str) -> TwoFactorMode:
     """Parse a pre-normalized (lowercased, stripped) EMPOWER_2FA_MODE value.
 
@@ -82,6 +89,7 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
         email = os.getenv("EMPOWER_EMAIL") or _prompt("Email: ")
         password = os.getenv("EMPOWER_PASSWORD") or getpass.getpass("Password: ", stream=sys.stderr)
     except EOFError:
+        _end_prompt_line()
         raise InteractiveAuthRequired(
             "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
         ) from None
@@ -141,6 +149,7 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
         try:
             code = _prompt("Enter verification code: ")
         except EOFError:
+            _end_prompt_line()
             raise InteractiveAuthRequired(
                 "2FA verification cannot complete without an interactive terminal."
             ) from None
