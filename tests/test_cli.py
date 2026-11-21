@@ -1119,6 +1119,28 @@ def test_cmd_login(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert parsed["session_path"] == str(session)
 
 
+@pytest.mark.parametrize("code", [113, 207, 910])
+def test_cmd_login_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str], code: int) -> None:
+    """LoginRejectedError gets its own type and no `pc2 login` suggestion: the message
+    carries Empower's reason, and logging in again with the same identity fails the same way."""
+    from personalcapital2.exceptions import LoginRejectedError
+
+    with (
+        patch("personalcapital2.cli.authenticate") as mock_auth,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        mock_auth.side_effect = LoginRejectedError(
+            f"Empower rejected the sign-in ({code}: x).", errors=({"code": code, "message": "x"},)
+        )
+        main(["--session", str(tmp_path / "session.json"), "login"])
+
+    assert exc_info.value.code == EXIT_AUTH
+    err = json.loads(capsys.readouterr().err)
+    assert err["type"] == "LoginRejectedError"
+    assert err["error"].startswith("Empower rejected the sign-in")
+    assert "suggestion" not in err
+
+
 def test_cmd_login_not_tty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Non-TTY login: authenticate() raises InteractiveAuthRequired (subclass of
     EmpowerAuthError) → main() emits structured JSON via _error()."""

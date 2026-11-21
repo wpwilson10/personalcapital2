@@ -22,7 +22,7 @@ import re
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeGuard, cast
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -33,6 +33,7 @@ from personalcapital2.exceptions import (
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.models import (
@@ -103,7 +104,9 @@ DEFAULT_SESSION_PATH = (
 _AUTH_ERROR_PATTERNS: tuple[str, ...] = (
     "session not authenticated",
     "session expired",
-    "session no longer valid",
+    # Matches both "Session no longer valid" and the real wording, "Session is
+    # no longer valid. Please return to the login screen." (issue #4).
+    "no longer valid",
 )
 
 _AUTH_FAILURE_LEVELS: frozenset[str] = frozenset({"NONE", "MFA_REQUIRED"})
@@ -122,6 +125,97 @@ def _is_auth_error(sp_header: dict[str, Any], error_message: str) -> bool:
         return True
     msg = error_message.lower()
     return any(pattern in msg for pattern in _AUTH_ERROR_PATTERNS)
+
+
+# This login flow identifies accounts by email address only. Accounts that sign
+# in with a username get one of these identifyUser codes. 113 says so outright;
+# 207 can also mean the email isn't recognised, so its hint is conditional.
+_ISSUE_9 = "https://github.com/wpwilson10/personalcapital2/issues/9"
+_USERNAME_ACCOUNT_HINTS: dict[str, str] = {
+    "113": (
+        "Accounts that sign in with a username instead of an email address "
+        f"aren't supported yet: {_ISSUE_9}"
+    ),
+    "207": (
+        "If this account signs in with a username instead of an email address, "
+        f"it isn't supported yet: {_ISSUE_9}"
+    ),
+}
+
+# "Session not authenticated." A stale cached session, which the stale-session
+# retry in auth.authenticate() handles, so it is never a LoginRejectedError.
+_SESSION_ERROR_CODE = "201"
+
+
+def _is_json_list(value: object) -> TypeGuard[list[Any]]:
+    """Narrow a decoded JSON value to an array."""
+    return isinstance(value, list)
+
+
+def _is_json_object(value: object) -> TypeGuard[dict[str, Any]]:
+    """Narrow a decoded JSON value to an object (JSON object keys are always str)."""
+    return isinstance(value, dict)
+
+
+def _nonempty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _header_errors(header: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """``spHeader.errors`` entries that carry a code or a message, as sent."""
+    raw = header.get("errors")
+    if not _is_json_list(raw):
+        return ()
+    return tuple(
+        e
+        for e in raw
+        if _is_json_object(e) and (e.get("code") is not None or _nonempty_str(e.get("message")))
+    )
+
+
+def _describe_error(error: dict[str, Any]) -> str:
+    code = error.get("code")
+    message = _nonempty_str(error.get("message"))
+    if code is not None and message:
+        return f"{code}: {message}"
+    return message or f"code {code}"
+
+
+def _describe_header(header: dict[str, Any]) -> str:
+    """What the server said (errors, redirect URLs) as one line, or "" if nothing."""
+    parts = [_describe_error(e) for e in _header_errors(header)]
+    for label, key in (("login page", "loginURL"), ("destination", "destinationURL")):
+        url = _nonempty_str(header.get(key))
+        if url:
+            parts.append(f"{label} {url}")
+    return "; ".join(parts)
+
+
+def _is_session_error(error: dict[str, Any]) -> bool:
+    message = str(error.get("message") or "").lower()
+    return str(error.get("code")) == _SESSION_ERROR_CODE or any(
+        p in message for p in _AUTH_ERROR_PATTERNS
+    )
+
+
+def _login_rejection(header: dict[str, Any]) -> LoginRejectedError | None:
+    """Build a LoginRejectedError from an identifyUser ``spHeader``, or return None.
+
+    A rejection needs at least one error with a code or message, none of them a
+    session error (stale cookies). Otherwise return None: the caller raises a
+    plain EmpowerAuthError, so the stale-session retry still applies.
+    """
+    errors = _header_errors(header)
+    if not errors or any(_is_session_error(e) for e in errors):
+        return None
+    codes = {str(e.get("code")) for e in errors}
+    hints = [hint for code, hint in _USERNAME_ACCOUNT_HINTS.items() if code in codes]
+    return LoginRejectedError(
+        " ".join([f"Empower rejected the sign-in ({_describe_header(header)}).", *hints]),
+        errors=errors,
+        login_url=_nonempty_str(header.get("loginURL")),
+        destination_url=_nonempty_str(header.get("destinationURL")),
+    )
 
 
 DEFAULT_USER_AGENT = (
@@ -226,6 +320,7 @@ class EmpowerClient:
 
         Raises:
             TwoFactorRequired: if 2FA is needed before password auth.
+            LoginRejectedError: if Empower rejects the username and says why.
             EmpowerAuthError: if login fails for any other reason.
         """
         if self._session_path:
@@ -235,17 +330,25 @@ class EmpowerClient:
         if csrf is None:
             raise EmpowerAuthError("Failed to extract CSRF token from login page")
 
-        csrf, auth_level = self._identify_user(username, csrf)
-        if csrf is None or auth_level is None:
-            raise EmpowerAuthError("Failed to identify user — no CSRF or auth level returned")
-
-        self._csrf = csrf
-
-        if auth_level == "NONE":
+        header = self._identify_user(username, csrf)
+        new_csrf = _nonempty_str(header.get("csrf"))
+        auth_level = _nonempty_str(header.get("authLevel"))
+        if new_csrf is None or auth_level is None or auth_level == "NONE":
+            rejection = _login_rejection(header)
+            if rejection is not None:
+                raise rejection
+            details = _describe_header(header)
+            said = f" Empower said: {details}." if details else ""
+            if auth_level == "NONE":
+                raise EmpowerAuthError(
+                    "identifyUser returned authLevel=NONE — account may be rate-limited "
+                    f"or credentials are invalid. Wait a few minutes and retry.{said}"
+                )
             raise EmpowerAuthError(
-                "identifyUser returned authLevel=NONE — account may be rate-limited "
-                "or credentials are invalid. Wait a few minutes and retry."
+                f"Failed to identify user — no CSRF or auth level returned.{said}"
             )
+
+        self._csrf = new_csrf
 
         if auth_level not in ("USER_REMEMBERED", "SESSION_AUTHENTICATED"):
             raise TwoFactorRequiredError()
@@ -647,8 +750,8 @@ class EmpowerClient:
         log.warning("CSRF pattern not found in login page response")
         return None
 
-    def _identify_user(self, username: str, csrf: str) -> tuple[str | None, str | None]:
-        """Send username to get a session CSRF token and auth level."""
+    def _identify_user(self, username: str, csrf: str) -> dict[str, Any]:
+        """Send the username; return the response's ``spHeader`` ({} if absent)."""
         data = {
             "username": username,
             "csrf": csrf,
@@ -670,20 +773,20 @@ class EmpowerClient:
             raise EmpowerAuthError(f"identifyUser failed with HTTP {response.status_code}")
         if response.status_code != 200:
             log.warning("identifyUser returned unexpected HTTP %d", response.status_code)
-            return None, None
+            return {}
 
         result = self._parse_json(response, "identifyUser")
-        header = result.get("spHeader", {})
-        auth_level = header.get("authLevel")
-        errors = header.get("errors", [])
+        raw_header = result.get("spHeader")
+        header: dict[str, Any] = raw_header if _is_json_object(raw_header) else {}
         log.info(
-            "identifyUser: authLevel=%s, success=%s, errors=%s, status=%s",
-            auth_level,
+            "identifyUser: authLevel=%s, success=%s, errors=%s, loginURL=%s, destinationURL=%s",
+            header.get("authLevel"),
             header.get("success"),
-            errors,
-            header.get("SP_HEADER_VERSION"),
+            header.get("errors"),
+            header.get("loginURL"),
+            header.get("destinationURL"),
         )
-        return header.get("csrf"), auth_level
+        return header
 
     def _authenticate_password(self, password: str) -> None:
         """Submit password. Raises on failure or if MFA is still required."""

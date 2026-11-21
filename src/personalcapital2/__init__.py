@@ -11,6 +11,7 @@ from personalcapital2.exceptions import (
     EmpowerAuthError,
     EmpowerNetworkError,
     InteractiveAuthRequired,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.models import (
@@ -61,6 +62,7 @@ __all__ = [
     "HoldingsResult",
     "InteractiveAuthRequired",
     "InvestmentPerformance",
+    "LoginRejectedError",
     "MarketQuote",
     "NetWorthEntry",
     "NetWorthResult",

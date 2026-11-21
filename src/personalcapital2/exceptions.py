@@ -12,6 +12,39 @@ class TwoFactorRequiredError(EmpowerAuthError):
         super().__init__(message)
 
 
+class LoginRejectedError(EmpowerAuthError):
+    """Raised when Empower rejects the sign-in at identification and says why.
+
+    The message leads with Empower's own error codes and messages. The fields
+    carry what the server sent, unchanged:
+
+    - ``errors``: the ``spHeader.errors`` entries (e.g. ``{"code": 113,
+      "message": "Please use a valid email address."}``)
+    - ``login_url`` / ``destination_url``: ``spHeader.loginURL`` /
+      ``spHeader.destinationURL``, set when Empower points the account elsewhere
+
+    The cached session is left alone and the login is not retried: the server
+    rejected the identity, not the session.
+    """
+
+    def __init__(
+        self,
+        message: str = "Empower rejected the sign-in",
+        errors: tuple[dict[str, object], ...] = (),
+        login_url: str | None = None,
+        destination_url: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.errors = errors
+        self.login_url = login_url
+        self.destination_url = destination_url
+
+    @property
+    def codes(self) -> tuple[str, ...]:
+        """Error codes as strings, in server order (entries without a code are skipped)."""
+        return tuple(str(e["code"]) for e in self.errors if e.get("code") is not None)
+
+
 class InteractiveAuthRequired(EmpowerAuthError):  # noqa: N818 — name captures the recovery action, not "X happened"
     """Raised when authentication needs interactive input (TTY) and one isn't available.
 

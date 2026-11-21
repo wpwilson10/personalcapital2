@@ -36,6 +36,7 @@ from personalcapital2.exceptions import (
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    LoginRejectedError,
 )
 
 _VERSION = _pkg_version("personalcapital2")
@@ -801,6 +802,10 @@ def main(argv: list[str] | None = None) -> None:
             if cause is eg:
                 raise
             raise cause from eg
+    except LoginRejectedError as e:
+        # No suggestion: the message carries Empower's own reason, and logging in
+        # again with the same identity fails the same way.
+        _error(str(e), "LoginRejectedError", EXIT_AUTH)
     except EmpowerAuthError as e:
         _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion="pc2 login")
     except EmpowerNetworkError as e:

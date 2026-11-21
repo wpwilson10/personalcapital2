@@ -18,9 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tested on Python 3.12 through 3.15.**
 - The README recommends `uv tool install "personalcapital2[mcp]"` for the MCP
   server.
+- **CLI: a rejected sign-in now reports `"type": "LoginRejectedError"`**
+  (previously `"EmpowerAuthError"`) with no `suggestion`. The exit code is
+  still 1. Scripts matching on `type` should accept both. `start_authentication` in the MCP server returns
+  `Error: Empower rejected the sign-in (...)` for these instead of
+  `Error: authentication failed: ...`.
+
+### Added
+
+- **`LoginRejectedError`** (subclass of `EmpowerAuthError`), raised when
+  Empower rejects the username at sign-in and says why. Its message leads with
+  Empower's own error codes and messages, replacing the generic
+  "rate-limited or invalid credentials" guess. Its `errors`, `codes`,
+  `login_url` and `destination_url` fields carry what the server sent. Accounts
+  that sign in with a username rather than an email address (codes 113/207)
+  are told they aren't supported yet (#9).
 
 ### Fixed
 
+- A rejected sign-in no longer deletes the cached session file or retries the
+  login. Previously any login error with a session file present was treated as
+  a stale session. Other login failures still retry once as before, and their
+  messages now include what Empower said.
+- "Session is no longer valid" (Empower's exact wording) is recognised as an
+  expired session.
 - Under mcp 2.1+, an unexpected API response shape reaches the agent as a
   readable error instead of "Error executing tool <name>".
 - The MCP server reports the package version in `serverInfo`.

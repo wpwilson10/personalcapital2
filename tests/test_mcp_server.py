@@ -1576,6 +1576,27 @@ def test_start_authentication_keeps_old_client_on_failure(
     assert app_ctx.pending_2fa_mode is None
 
 
+def test_start_authentication_login_rejected(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    """A rejection reads differently from a transient failure, and keeps the old client."""
+    from personalcapital2.exceptions import LoginRejectedError
+
+    app_ctx = _make_app_ctx(tmp_path)
+    original_client = app_ctx.client
+    _FakeAuthClient.login_recipe = [
+        LoginRejectedError("Empower rejected the sign-in (113: Please use a valid email address.).")
+    ]
+
+    result = start_authentication(_make_ctx(app_ctx))
+
+    assert result.startswith("Error: Empower rejected the sign-in (113:")
+    assert "authentication failed" not in result
+    assert app_ctx.client is original_client
+
+
 def test_start_authentication_no_2fa_clears_pending_mode(
     tmp_path: Path,
     auth_env: None,

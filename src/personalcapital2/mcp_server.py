@@ -53,6 +53,7 @@ from personalcapital2.exceptions import (
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.types import TwoFactorMode
@@ -308,6 +309,9 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
         )
     except EmpowerNetworkError as exc:
         return f"Error: network failure during login — {exc}. Check connection and try again."
+    except LoginRejectedError as exc:
+        # Message starts "Empower rejected the sign-in", distinct from transient failures.
+        return f"Error: {exc}"
     except (EmpowerAuthError, EmpowerAPIError) as exc:
         return f"Error: authentication failed: {exc}"
 

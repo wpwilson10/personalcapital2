@@ -14,6 +14,7 @@ from personalcapital2.auth import authenticate, run_authenticated
 from personalcapital2.exceptions import (
     EmpowerAuthError,
     InteractiveAuthRequired,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.types import TwoFactorMode
@@ -28,14 +29,17 @@ if TYPE_CHECKING:
 def test_public_api_imports() -> None:
     """Documented exports are importable from the package root."""
     from personalcapital2 import (
+        EmpowerAuthError,
         EmpowerNetworkError,
         InteractiveAuthRequired,
+        LoginRejectedError,
         run_authenticated,
     )
 
     assert run_authenticated is not None
     assert EmpowerNetworkError is not None
     assert InteractiveAuthRequired is not None
+    assert issubclass(LoginRejectedError, EmpowerAuthError)
 
 
 # --- Test fixtures: configurable FakeClient ---
@@ -321,6 +325,30 @@ def test_run_authenticated_recovers_from_stale_fetch(
     assert result == "ok"
     assert op_calls["n"] == 2
     assert auth_calls["n"] == 1
+
+
+def test_run_authenticated_propagates_login_rejection(
+    tmp_path: Path,
+    env_creds: None,
+) -> None:
+    """A stale fetch triggers re-auth; if Empower rejects that sign-in, the rejection
+    propagates, the operation is not run again, and the session file is kept."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text("{}")
+    _FakeClient.login_recipe = [LoginRejectedError("Empower rejected the sign-in (113: x).")]
+
+    op_calls = {"n": 0}
+
+    def operation(client: Any) -> str:
+        op_calls["n"] += 1
+        raise EmpowerAuthError("Session not authenticated")
+
+    with pytest.raises(LoginRejectedError):
+        run_authenticated(operation, session_path)
+
+    assert op_calls["n"] == 1
+    assert session_path.exists()
+    assert sum(c.login_calls for c in _FakeClient.instances) == 1
 
 
 # --- 8. run_authenticated propagates InteractiveAuthRequired from authenticate ---
