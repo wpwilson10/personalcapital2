@@ -1529,7 +1529,7 @@ def test_complete_authentication_succeeds(
     [
         (
             EmpowerAuthError("2FA verification failed: Incorrect verification code entered."),
-            "Error: 2FA verification failed: Incorrect verification code entered.",
+            "Error: 2FA verification failed: Incorrect verification code entered. Call",
             True,
         ),
         (
@@ -1561,6 +1561,7 @@ def test_complete_authentication_failure_messages(
 
     assert result.startswith(expected_start)
     assert result.count("2FA verification failed") <= 1
+    assert ".." not in result
     assert ("Call start_authentication to send a new code." in result) is says_new_code
     assert app_ctx.pending_2fa_mode is None
 

@@ -360,7 +360,7 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
         # restart cleanly via start_authentication. The client's message
         # already starts "2FA verification failed: ...".
         app_ctx.pending_2fa_mode = None
-        return f"Error: {exc}. Call start_authentication to send a new code."
+        return f"Error: {str(exc).rstrip('.')}. Call start_authentication to send a new code."
     app_ctx.pending_2fa_mode = None
     app_ctx.client.save_session()
     return "Authenticated."
