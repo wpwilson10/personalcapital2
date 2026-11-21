@@ -13,7 +13,7 @@ class TwoFactorRequiredError(EmpowerAuthError):
 
 
 class LoginRejectedError(EmpowerAuthError):
-    """Raised when Empower rejects the sign-in at identification and says why.
+    """Raised when Empower rejects the sign-in (username or password) and says why.
 
     The message leads with Empower's own error codes and messages. The fields
     carry what the server sent, unchanged:
@@ -24,7 +24,7 @@ class LoginRejectedError(EmpowerAuthError):
       ``spHeader.destinationURL``, set when Empower points the account elsewhere
 
     The cached session is left alone and the login is not retried: the server
-    rejected the identity, not the session.
+    rejected the credentials, not the session.
     """
 
     def __init__(

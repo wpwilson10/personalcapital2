@@ -320,7 +320,7 @@ class EmpowerClient:
 
         Raises:
             TwoFactorRequired: if 2FA is needed before password auth.
-            LoginRejectedError: if Empower rejects the username and says why.
+            LoginRejectedError: if Empower rejects the username or password and says why.
             EmpowerAuthError: if login fails for any other reason.
         """
         if self._session_path:
@@ -817,6 +817,12 @@ class EmpowerClient:
         header = result.get("spHeader", {})
 
         if header.get("success") is False:
+            # A wrong password ("Incorrect password entered.") is a rejection:
+            # retrying can't help. Session errors here (stale cookies, issue #4)
+            # stay plain EmpowerAuthError so the stale-session retry applies.
+            rejection = _login_rejection(header)
+            if rejection is not None:
+                raise rejection
             errors = header.get("errors", [])
             msg = errors[0].get("message", "Unknown error") if errors else "Unknown error"
             raise EmpowerAuthError(f"Password auth failed: {msg}")

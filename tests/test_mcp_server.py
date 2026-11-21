@@ -20,6 +20,7 @@ from personalcapital2.exceptions import (  # noqa: E402
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    LoginRejectedError,
     TwoFactorRequiredError,
 )
 from personalcapital2.mcp_server import (  # noqa: E402
@@ -1523,6 +1524,47 @@ def test_complete_authentication_succeeds(
     assert fresh_client.save_session_calls == 1
 
 
+@pytest.mark.parametrize(
+    ("error", "expected_start", "says_new_code"),
+    [
+        (
+            EmpowerAuthError("2FA verification failed: Incorrect verification code entered."),
+            "Error: 2FA verification failed: Incorrect verification code entered.",
+            True,
+        ),
+        (
+            LoginRejectedError("Empower rejected the sign-in (Incorrect password entered.)."),
+            "Error: Empower rejected the sign-in (Incorrect password entered.).",
+            False,
+        ),
+    ],
+)
+def test_complete_authentication_failure_messages(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+    error: EmpowerAuthError,
+    expected_start: str,
+    says_new_code: bool,
+) -> None:
+    """A wrong code says once that verification failed and names the next step;
+    a rejected password reads as a rejection. Both clear the pending challenge."""
+    client = _FakeAuthClient(session_path=tmp_path / "session.json")
+    _FakeAuthClient.verify_2fa_recipe = [error]
+    app_ctx = _AppContext(
+        client=client,  # type: ignore[arg-type]
+        session_path=tmp_path / "session.json",
+        pending_2fa_mode=_TwoFactorMode.SMS,
+    )
+
+    result = complete_authentication(_make_ctx(app_ctx), code="0000")
+
+    assert result.startswith(expected_start)
+    assert result.count("2FA verification failed") <= 1
+    assert ("Call start_authentication to send a new code." in result) is says_new_code
+    assert app_ctx.pending_2fa_mode is None
+
+
 def test_complete_authentication_no_pending_challenge(
     tmp_path: Path,
     auth_env: None,
@@ -1582,8 +1624,6 @@ def test_start_authentication_login_rejected(
     patch_auth_client: None,
 ) -> None:
     """A rejection reads differently from a transient failure, and keeps the old client."""
-    from personalcapital2.exceptions import LoginRejectedError
-
     app_ctx = _make_app_ctx(tmp_path)
     original_client = app_ctx.client
     _FakeAuthClient.login_recipe = [

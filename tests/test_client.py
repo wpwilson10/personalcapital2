@@ -356,6 +356,81 @@ def test_authenticate_session_error_at_identify_still_clears_and_retries(
     assert len(identify_calls) == 2
 
 
+def _password_error(errors: list[dict[str, object]]) -> EmpowerAuthError:
+    """Run login() to a rejected authenticatePassword and return the raised error."""
+    client = EmpowerClient()
+    responses = [
+        _mock_response(text="window.csrf='aaa-111-bbb'"),
+        _mock_response(json_data={"spHeader": {"csrf": "t2", "authLevel": "USER_REMEMBERED"}}),
+        _mock_response(json_data={"spHeader": {"success": False, "errors": errors}}),
+    ]
+    with (
+        patch.object(client._session, "request", side_effect=responses),
+        pytest.raises(EmpowerAuthError) as exc_info,
+    ):
+        client.login("user@example.com", "wrong")
+    return exc_info.value
+
+
+def test_login_wrong_password_is_a_rejection() -> None:
+    # Message as Empower sent it in a live wrong-password login.
+    err = _password_error([{"message": "Incorrect password entered."}])
+    assert isinstance(err, LoginRejectedError)
+    assert str(err) == "Empower rejected the sign-in (Incorrect password entered.)."
+
+
+def test_login_session_error_at_password_step_stays_retryable() -> None:
+    """Issue #4: stale cookies surface at authenticatePassword; that must stay retryable."""
+    err = _password_error(
+        [{"message": "Session is no longer valid. Please return to the login screen."}]
+    )
+    assert type(err) is EmpowerAuthError
+
+
+def test_authenticate_wrong_password_keeps_session_and_does_not_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end, as seen live: remembered device + wrong password must not delete the
+    session file (losing the remembered device) or retry (a second failed attempt + SMS)."""
+    from personalcapital2.auth import authenticate
+
+    session_path = tmp_path / "session.json"
+    session_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "csrf": "cached-csrf",
+                "cookies": [{"name": "JSESSIONID", "value": "x", "domain": "pc-api.test"}],
+            }
+        )
+    )
+    session_path.chmod(0o600)
+    monkeypatch.setenv("EMPOWER_EMAIL", "user@example.com")
+    monkeypatch.setenv("EMPOWER_PASSWORD", "wrong")
+
+    responses = [
+        _mock_response(text="window.csrf='aaa-111-bbb'"),
+        _mock_response(json_data={"spHeader": {"csrf": "t2", "authLevel": "USER_REMEMBERED"}}),
+        _mock_response(
+            json_data={
+                "spHeader": {
+                    "success": False,
+                    "errors": [{"message": "Incorrect password entered."}],
+                }
+            }
+        ),
+    ]
+    with (
+        patch("requests.Session.request", side_effect=responses) as request,
+        pytest.raises(LoginRejectedError),
+    ):
+        authenticate(session_path)
+
+    assert session_path.exists()
+    password_calls = [c for c in request.call_args_list if "authenticatePassword" in str(c)]
+    assert len(password_calls) == 1
+
+
 def test_login_raises_on_missing_csrf() -> None:
     client = EmpowerClient()
     csrf_page = _mock_response(text="<html>no csrf</html>")

@@ -82,7 +82,7 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
     Raises:
         InteractiveAuthRequired: if a credential or 2FA prompt would block on
             EOFError (non-TTY).
-        LoginRejectedError: if Empower rejects the username and says why.
+        LoginRejectedError: if Empower rejects the username or password and says why.
         EmpowerAuthError: if login fails for credential or server reasons.
     """
     try:
@@ -128,7 +128,7 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
         client, mode = _login_and_maybe_challenge()
     except (InteractiveAuthRequired, LoginRejectedError):
         # Both subclass EmpowerAuthError; catch them first so neither is mistaken
-        # for stale cookies. "No TTY" and "Empower rejected this username" are
+        # for stale cookies. "No TTY" and "Empower rejected these credentials" are
         # not session problems: re-raise as-is, keeping the cached session and
         # not calling identifyUser again.
         raise

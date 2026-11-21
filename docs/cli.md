@@ -81,7 +81,7 @@ All errors are JSON to stderr with a consistent schema:
 
 The `suggestion` field appears when a concrete recovery action is available (auth errors, invalid account IDs).
 
-`"type": "LoginRejectedError"` (exit 1) means Empower rejected the username at sign-in: `error` starts with Empower's own codes and messages, and there is no `suggestion`, because logging in again with the same username fails the same way. Accounts that sign in with a username rather than an email address get code 113 or 207 and aren't supported yet.
+`"type": "LoginRejectedError"` (exit 1) means Empower rejected the sign-in (the username or the password): `error` starts with Empower's own codes and messages, and there is no `suggestion`, because logging in again with the same credentials fails the same way. Accounts that sign in with a username rather than an email address get code 113 or 207 and aren't supported yet.
 
 ## Date shortcuts
 

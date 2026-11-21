@@ -351,11 +351,16 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
             f"Error: network failure during 2FA verification — {exc}. "
             "Try complete_authentication again."
         )
+    except LoginRejectedError as exc:
+        # The code was accepted but Empower rejected the password.
+        app_ctx.pending_2fa_mode = None
+        return f"Error: {exc}"
     except (EmpowerAuthError, EmpowerAPIError) as exc:
         # Wrong code or server rejection — clear state so the agent can
-        # restart cleanly via start_authentication.
+        # restart cleanly via start_authentication. The client's message
+        # already starts "2FA verification failed: ...".
         app_ctx.pending_2fa_mode = None
-        return f"Error: 2FA verification failed: {exc}"
+        return f"Error: {exc}. Call start_authentication to send a new code."
     app_ctx.pending_2fa_mode = None
     app_ctx.client.save_session()
     return "Authenticated."

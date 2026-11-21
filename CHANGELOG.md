@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`LoginRejectedError`** (subclass of `EmpowerAuthError`), raised when
-  Empower rejects the username at sign-in and says why. Its message leads with
+  Empower rejects the sign-in (the username, or a wrong password) and says why. Its message leads with
   Empower's own error codes and messages, replacing the generic
   "rate-limited or invalid credentials" guess. Its `errors`, `codes`,
   `login_url` and `destination_url` fields carry what the server sent. Accounts
@@ -40,8 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   login. Previously any login error with a session file present was treated as
   a stale session. Other login failures still retry once as before, and their
   messages now include what Empower said.
+- **A wrong password no longer forgets the device.** It raises
+  `LoginRejectedError` instead of being treated as a stale session, which
+  deleted the cached session, retried with a fresh client (sending a new SMS)
+  and failed the password a second time.
 - "Session is no longer valid" (Empower's exact wording) is recognised as an
   expired session.
+- MCP `complete_authentication` with a wrong code no longer repeats "2FA
+  verification failed", and it says to call `start_authentication` for a new
+  code.
 - Without a terminal, a login prompt that hits end-of-input no longer shares a
   line with the CLI's JSON error, so the last line of stderr is always valid
   JSON.
