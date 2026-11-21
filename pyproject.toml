@@ -50,7 +50,9 @@ pythonVersion = "3.12"
 reportUnnecessaryTypeIgnoreComment = true
 exclude = ["scripts", ".venv"]
 
-# mcp SDK (mcp>=1.0) has incomplete type stubs — revisit when SDK types improve
+# Relaxed checks for the MCP server. Tools are nested in create_server, hence
+# reportUnusedFunction. The other relaxations date from mcp 1.x and may no
+# longer be needed under mcp 2.x.
 [[tool.pyright.executionEnvironments]]
 root = "src/personalcapital2/mcp_server.py"
 reportUnknownMemberType = false
