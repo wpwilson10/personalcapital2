@@ -177,7 +177,12 @@ class BenchmarkPerformance:
 
 @dataclass(frozen=True)
 class PortfolioVsBenchmark:
-    """Daily portfolio vs S&P 500 comparison values."""
+    """Daily portfolio vs S&P 500 comparison values.
+
+    ``portfolio_value`` and ``sp500_value`` are the API's ``YOU`` and ``^INX``
+    series: cumulative percent change since the first day of the range
+    (a baseline row of 0), not dollar values.
+    """
 
     date: date
     portfolio_value: Decimal | None

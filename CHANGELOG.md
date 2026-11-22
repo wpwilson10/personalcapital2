@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `start_authentication` and `complete_authentication` failures work the same way.
 - **MCP truncation keeps the newest days.** Date-based lists (transactions, net
   worth, balances, performance, portfolio vs benchmark) used to keep their
-  first rows. Because Empower returns them oldest-first, the most recent data
-  was cut, and balances lost whole accounts. Now the newest whole days are
+  first rows. Empower currently returns them oldest-first, so the most recent
+  data was cut, and balances lost whole accounts. Now the newest whole days are
   kept, with one cutoff shared by every list in the response, and
   `truncated.next_end_date` says where to page back from. `limit` is a soft
   maximum: the newest day is always returned whole.

@@ -145,7 +145,7 @@ When the cached session expires mid-conversation, the agent recovers in chat wit
 
 > Note: `EMPOWER_PASSWORD` sits plaintext in the MCP client config — standard pattern for MCP servers, but worth knowing.
 
-The server is token-aware. Responses are compact JSON capped at ~12,500 tokens (configurable via `PC2_MCP_MAX_CHARS`), and summaries are always complete. When a date-based list (transactions, net worth, balances, performance) doesn't fit, the newest whole days are kept and `truncated.next_end_date` tells the agent where to page back from. Tool errors come back with `isError: true`.
+The server is token-aware. Responses are compact JSON capped at ~12,500 tokens (configurable via `PC2_MCP_MAX_CHARS`), and summaries are always complete. When a date-based list (transactions, net worth, balances, performance, portfolio vs benchmark) doesn't fit, the newest whole days are kept and `truncated.next_end_date` tells the agent where to page back from. Tool errors come back with `isError: true`.
 
 ## Known API quirks
 

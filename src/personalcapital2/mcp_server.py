@@ -66,8 +66,9 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_MAX_CHARS = 50_000
 
-# Room left for the ``truncated`` metadata when checking a cut against the cap.
-_META_RESERVE = 300
+# Room left for the ``truncated`` metadata when checking a cut against the cap
+# (about 300 characters with two lists cut and both hints).
+_META_RESERVE = 500
 
 # A JSON object decoded from a serialized result. Values are whatever JSON holds
 # (lists of row dicts, nested summaries, scalars), hence Any.
@@ -146,8 +147,13 @@ def _cut_dated(
     limit: int | None,
     max_chars: int,
     cuts: dict[str, dict[str, int]],
-) -> str | None:
-    """Keep the newest whole days that fit; return the cutoff date, or None if nothing was cut.
+    start_date: date | None,
+) -> tuple[str, str | None] | None:
+    """Keep the newest whole days that fit.
+
+    Returns ``(cutoff, next_end_date)``, or None if nothing was cut.
+    ``next_end_date`` is None when every omitted row predates ``start_date``
+    (Empower's baseline row), since there is no earlier page to fetch.
 
     One cutoff applies to every dated list in the response. The newest day is
     always kept whole, even when it alone exceeds ``limit`` or the cap.
@@ -185,7 +191,13 @@ def _cut_dated(
     for field, rows in full.items():
         if len(data[field]) < len(rows):
             cuts[field] = {"showing": len(data[field]), "total": len(rows)}
-    return cutoff if cuts else None
+    if not cuts:
+        return None
+    start = start_date.isoformat() if start_date is not None else ""
+    more_in_range = any(start <= row["date"] < cutoff for rows in full.values() for row in rows)
+    if not more_in_range:
+        return cutoff, None
+    return cutoff, (date.fromisoformat(cutoff) - timedelta(days=1)).isoformat()
 
 
 def _cut_undated(
@@ -242,7 +254,7 @@ def _render(
     max_chars = _get_max_chars()
     cuts: dict[str, dict[str, int]] = {}
 
-    cutoff = _cut_dated(data, dated, limit, max_chars, cuts) if dated else None
+    dated_cut = _cut_dated(data, dated, limit, max_chars, cuts, start_date) if dated else None
     if undated:
         _cut_undated(data, undated, limit, max_chars, cuts)
     if not cuts:
@@ -250,13 +262,13 @@ def _render(
 
     truncated: _Json = dict(cuts)
     hints: list[str] = []
-    if cutoff is not None:
-        next_end = date.fromisoformat(cutoff) - timedelta(days=1)
-        if start_date is None or next_end >= start_date:
-            truncated["next_end_date"] = next_end.isoformat()
+    if dated_cut is not None:
+        cutoff, next_end = dated_cut
+        if next_end is not None:
+            truncated["next_end_date"] = next_end
             hints.append(
                 f"Showing the newest days, from {cutoff}. For earlier rows, call again "
-                f"with the same start_date and end_date={next_end.isoformat()}."
+                f"with the same start_date and end_date={next_end}."
             )
         else:
             hints.append(
@@ -265,9 +277,13 @@ def _render(
             )
     for field in undated:
         if field in cuts:
-            hints.append(
-                f"Showing the first {cuts[field]['showing']} of {cuts[field]['total']} {field}."
-            )
+            shown, total = cuts[field]["showing"], cuts[field]["total"]
+            if limit is not None and shown == limit:
+                hints.append(f"Showing the first {shown} of {total} {field}; pass a larger limit.")
+            else:
+                hints.append(
+                    f"Showing the first {shown} of {total} {field} (response size cap reached)."
+                )
     truncated["hint"] = " ".join(hints)
     data["truncated"] = truncated
     return _dump(data)
@@ -654,8 +670,10 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
                 find user_account_id values for investment accounts.
             limit: Maximum number of entries to return for each of the investments
                 and benchmarks lists (default 500). When there are more, the
-                newest days are kept for both lists and ``truncated.next_end_date``
-                says where to page back from.
+                newest whole days are kept for both lists and
+                ``truncated.next_end_date`` says where to page back from. The
+                newest day is always returned in full, even if it alone
+                exceeds limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
         limit < 1. If the session is expired, it fails with a message saying to call
@@ -680,7 +698,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         In portfolio_vs_benchmark, portfolio_value and sp500_value are Empower's
         "YOU" and "^INX" series: cumulative percent change since the first day,
         not dollar values. The series starts with a baseline row (value 0) on
-        the trading day before start_date.
+        the trading day before start_date. If the response is too large, the
+        newest days of portfolio_vs_benchmark are kept and
+        ``truncated.next_end_date`` says where to page back from.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).

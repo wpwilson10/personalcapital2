@@ -917,6 +917,37 @@ def test_render_baseline_row_omits_next_end_date() -> None:
     assert "before start_date" in data["truncated"]["hint"]
 
 
+def test_render_baseline_before_weekend_start_omits_next_end_date() -> None:
+    """start_date on a Sunday: the baseline is the Friday before and the first
+    kept day is Monday. Only the baseline was cut, so there's no next page."""
+    start = date(2026, 11, 1)  # Sunday
+    friday = _Row(date=date(2026, 10, 30), n=0)
+    week = tuple(_Row(date=date(2026, 11, 2) + timedelta(days=d), n=d + 1) for d in range(5))
+    data = json.loads(
+        _render(_Result(rows=(friday, *week)), dated=("rows",), limit=5, start_date=start)
+    )
+    assert len(data["rows"]) == 5
+    assert "next_end_date" not in data["truncated"]
+    assert "before start_date" in data["truncated"]["hint"]
+
+
+def test_render_dated_and_undated_together() -> None:
+    """get_quotes shape. The date cut runs first, sized against the undated list
+    at full length; when the undated list alone exceeds the cap, the dated list
+    keeps its newest day and the undated list is cut too, with both hints."""
+    result = _Result(rows=_daily(60), other=_daily(200))
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "3000"}):
+        text = _render(result, dated=("rows",), undated=("other",))
+    data = json.loads(text)
+    assert len(text) <= 3000
+    assert max(_dates(data, "rows")) == _END.isoformat()
+    assert data["truncated"]["rows"]["total"] == 60
+    assert data["truncated"]["other"]["total"] == 200
+    hint = data["truncated"]["hint"]
+    assert "Showing the newest days" in hint
+    assert "(response size cap reached)" in hint
+
+
 def test_render_char_cap_keeps_newest_days() -> None:
     """Over the character cap, the newest days are kept and the output fits."""
     with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "2000"}):
@@ -939,7 +970,7 @@ def test_render_undated_lists_keep_first_rows() -> None:
     data = json.loads(_render(_Result(rows=_daily(10)), undated=("rows",), limit=4))
     assert [r["n"] for r in data["rows"]] == [r.n for r in _daily(10)[:4]]
     assert data["truncated"]["rows"] == {"showing": 4, "total": 10}
-    assert data["truncated"]["hint"] == "Showing the first 4 of 10 rows."
+    assert data["truncated"]["hint"] == "Showing the first 4 of 10 rows; pass a larger limit."
     assert "next_end_date" not in data["truncated"]
 
 
