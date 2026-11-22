@@ -22,6 +22,9 @@ Client config (Claude Code / Claude Desktop):
             }
         }
     }
+
+Errors: every tool failure raises ``ToolError``, so the client sees
+``isError: true`` with the text ``Error executing tool <name>: <message>``.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ from collections.abc import (
     AsyncIterator,  # noqa: TC003 — needed at runtime by SDK
 )
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 from functools import wraps
 from importlib.metadata import version as _package_version
 from pathlib import Path  # noqa: TC003 — needed at runtime by lifespan
@@ -45,6 +48,7 @@ import requests
 if TYPE_CHECKING:
     from collections.abc import Callable
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from personalcapital2._serialization import serialize_result
 from personalcapital2.auth import parse_2fa_mode_env
@@ -61,6 +65,13 @@ from personalcapital2.types import TwoFactorMode
 log = logging.getLogger(__name__)
 
 _DEFAULT_MAX_CHARS = 50_000
+
+# Room left for the ``truncated`` metadata when checking a cut against the cap.
+_META_RESERVE = 300
+
+# A JSON object decoded from a serialized result. Values are whatever JSON holds
+# (lists of row dicts, nested summaries, scalars), hence Any.
+_Json = dict[str, Any]
 
 
 @dataclasses.dataclass
@@ -91,14 +102,19 @@ def _get_client(ctx: Context[_AppContext]) -> EmpowerClient:
     return app_ctx.client
 
 
-def _validate_date_range(start_date: date, end_date: date) -> str | None:
-    """Return an error message if start_date > end_date, else None."""
+def _check_date_range(start_date: date, end_date: date) -> None:
+    """Fail the tool call if start_date > end_date."""
     if start_date > end_date:
-        return (
-            f"Error: start_date ({start_date}) is after end_date ({end_date}). "
+        raise ToolError(
+            f"start_date ({start_date}) is after end_date ({end_date}). "
             "Swap them so start_date <= end_date."
         )
-    return None
+
+
+def _check_limit(limit: int) -> None:
+    """Fail the tool call if limit < 1."""
+    if limit < 1:
+        raise ToolError("limit must be at least 1.")
 
 
 def _get_max_chars() -> int:
@@ -112,109 +128,157 @@ def _get_max_chars() -> int:
     return _DEFAULT_MAX_CHARS
 
 
-def _apply_limit(serialized: str, field: str, limit: int) -> str:
-    """Limit a specific list field in serialized JSON output.
+# --- Response rendering and truncation ---
+#
+# Truncation only selects rows; it never changes a value. Dated lists keep the
+# newest whole days (so paging back with end_date never splits or repeats a
+# day); undated lists keep their first rows. Summaries are never cut.
 
-    If the field has more than ``limit`` items, truncates the list and adds
-    a ``truncated`` metadata field to the JSON output.
+
+def _dump(data: _Json) -> str:
+    """Compact JSON: agents don't need indentation, and it costs ~30% of the cap."""
+    return json.dumps(data, separators=(",", ":"))
+
+
+def _cut_dated(
+    data: _Json,
+    fields: tuple[str, ...],
+    limit: int | None,
+    max_chars: int,
+    cuts: dict[str, dict[str, int]],
+) -> str | None:
+    """Keep the newest whole days that fit; return the cutoff date, or None if nothing was cut.
+
+    One cutoff applies to every dated list in the response. The newest day is
+    always kept whole, even when it alone exceeds ``limit`` or the cap.
     """
-    if limit < 1:
-        return serialized
-    data: dict[str, Any] = json.loads(serialized)
-    items = data.get(field)
-    if not isinstance(items, list) or len(items) <= limit:
-        return serialized
-    total = len(items)
-    data[field] = items[:limit]
-    truncated: dict[str, Any] = data.get("truncated") or {}
-    truncated[field] = {"showing": limit, "total": total}
-    data["truncated"] = truncated
-    return json.dumps(data, indent=2)
+    full: dict[str, list[Any]] = {f: data[f] for f in fields if isinstance(data.get(f), list)}
+    dates = sorted({row["date"] for rows in full.values() for row in rows}, reverse=True)
+    if not dates:
+        return None
 
+    def keep_from(cutoff: str) -> None:
+        for field, rows in full.items():
+            data[field] = [row for row in rows if row["date"] >= cutoff]
 
-def _enforce_char_cap(serialized: str) -> str:
-    """Truncate list fields if output exceeds the character cap.
+    def fits() -> bool:
+        if limit is not None and any(len(data[f]) > limit for f in full):
+            return False
+        return len(_dump(data)) + _META_RESERVE <= max_chars
 
-    Iteratively finds the largest list field and uses binary search to fit
-    it within the cap. Repeats for additional list fields if still over.
-    Adds a ``truncated`` metadata field when truncation occurs.
+    keep_from(dates[-1])
+    if fits():
+        return None
 
-    The cap is configurable via the ``PC2_MCP_MAX_CHARS`` environment variable
-    (default: 50,000 characters, roughly 12,500 tokens).
-    """
-    max_chars = _get_max_chars()
-    if len(serialized) <= max_chars:
-        return serialized
-
-    data: dict[str, Any] = json.loads(serialized)
-
-    # Seed truncation metadata from any prior _apply_limit call
-    truncated_info: dict[str, Any] = {}
-    prior = data.get("truncated")
-    if isinstance(prior, dict):
-        truncated_info = {k: v for k, v in prior.items() if k != "hint"}
-
-    # Track which fields have already been fully truncated
-    exhausted: set[str] = set()
-
-    while True:
-        # Find the largest non-exhausted list field
-        largest_key: str | None = None
-        largest_len = 0
-        for key, value in data.items():
-            if key == "truncated":
-                continue
-            if isinstance(value, list) and len(value) > largest_len and key not in exhausted:
-                largest_key = key
-                largest_len = len(value)
-
-        if largest_key is None or largest_len == 0:
-            return serialized if not truncated_info else json.dumps(data, indent=2)
-
-        items: list[Any] = data[largest_key]
-
-        # Preserve the original total from a prior _apply_limit truncation
-        prior_info = truncated_info.get(largest_key)
-        if isinstance(prior_info, dict) and "total" in prior_info:
-            total: int = prior_info["total"]
+    # Binary search for the most days (newest first) that fit; at least one.
+    lo, hi = 1, len(dates) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        keep_from(dates[mid - 1])
+        if fits():
+            lo = mid
         else:
-            total = len(items)
+            hi = mid - 1
+    cutoff = dates[lo - 1]
+    keep_from(cutoff)
 
-        # Binary search for the maximum number of items that fit
-        lo, hi = 0, len(items)
+    for field, rows in full.items():
+        if len(data[field]) < len(rows):
+            cuts[field] = {"showing": len(data[field]), "total": len(rows)}
+    return cutoff if cuts else None
+
+
+def _cut_undated(
+    data: _Json,
+    fields: tuple[str, ...],
+    limit: int | None,
+    max_chars: int,
+    cuts: dict[str, dict[str, int]],
+) -> None:
+    """Keep the first rows of undated lists: up to ``limit``, then to fit the cap."""
+    present = [f for f in fields if isinstance(data.get(f), list)]
+    totals = {f: len(data[f]) for f in present}
+    if limit is not None:
+        for field in present:
+            data[field] = data[field][:limit]
+
+    # Shrink the largest list first until the output fits.
+    for field in sorted(present, key=lambda f: len(data[f]), reverse=True):
+        if len(_dump(data)) + _META_RESERVE <= max_chars:
+            break
+        rows: list[Any] = data[field]
+        lo, hi = 0, len(rows)
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            data[largest_key] = items[:mid]
-            truncated_info[largest_key] = {"showing": mid, "total": total}
-            data["truncated"] = {
-                **truncated_info,
-                "hint": "Narrow the date range or request fewer accounts.",
-            }
-            if len(json.dumps(data, indent=2)) <= max_chars:
+            data[field] = rows[:mid]
+            if len(_dump(data)) + _META_RESERVE <= max_chars:
                 lo = mid
             else:
                 hi = mid - 1
+        data[field] = rows[:lo]
 
-        data[largest_key] = items[:lo]
-        truncated_info[largest_key] = {"showing": lo, "total": total}
-        data["truncated"] = {
-            **truncated_info,
-            "hint": "Narrow the date range or request fewer accounts.",
-        }
+    for field in present:
+        if len(data[field]) < totals[field]:
+            cuts[field] = {"showing": len(data[field]), "total": totals[field]}
 
-        if len(json.dumps(data, indent=2)) <= max_chars:
-            break
 
-        exhausted.add(largest_key)
+def _render(
+    result: object,
+    *,
+    dated: tuple[str, ...] = (),
+    undated: tuple[str, ...] = (),
+    limit: int | None = None,
+    start_date: date | None = None,
+) -> str:
+    """Serialize a result for a tool response, truncating lists to fit.
 
-    return json.dumps(data, indent=2)
+    ``dated`` lists keep the newest whole days; ``undated`` lists keep their
+    first rows. Any other field (summaries, categories) is always complete.
+    When something is cut, a ``truncated`` object reports
+    ``{field: {showing, total}}``, a ``hint``, and — for dated lists, when the
+    omitted rows fall inside the requested range — ``next_end_date``.
+    """
+    data: _Json = json.loads(serialize_result(result))
+    max_chars = _get_max_chars()
+    cuts: dict[str, dict[str, int]] = {}
+
+    cutoff = _cut_dated(data, dated, limit, max_chars, cuts) if dated else None
+    if undated:
+        _cut_undated(data, undated, limit, max_chars, cuts)
+    if not cuts:
+        return _dump(data)
+
+    truncated: _Json = dict(cuts)
+    hints: list[str] = []
+    if cutoff is not None:
+        next_end = date.fromisoformat(cutoff) - timedelta(days=1)
+        if start_date is None or next_end >= start_date:
+            truncated["next_end_date"] = next_end.isoformat()
+            hints.append(
+                f"Showing the newest days, from {cutoff}. For earlier rows, call again "
+                f"with the same start_date and end_date={next_end.isoformat()}."
+            )
+        else:
+            hints.append(
+                f"Showing the newest days, from {cutoff}. The omitted rows are "
+                "dated before start_date."
+            )
+    for field in undated:
+        if field in cuts:
+            hints.append(
+                f"Showing the first {cuts[field]['showing']} of {cuts[field]['total']} {field}."
+            )
+    truncated["hint"] = " ".join(hints)
+    data["truncated"] = truncated
+    return _dump(data)
 
 
 def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
-    """Decorator that catches client exceptions and returns agent-friendly error strings.
+    """Decorator that turns client exceptions into ``ToolError`` with an agent-friendly message.
 
-    Wraps tool functions so the LLM agent gets a readable error message
-    instead of a raw Python traceback.
+    ``ToolError`` reaches the client as ``isError: true`` with the message intact
+    (prefixed by the SDK with ``Error executing tool <name>:``). Any other
+    escaping exception would reach the model only as that prefix.
     """
 
     @wraps(fn)
@@ -223,31 +287,31 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
             return fn(*args, **kwargs)
         except EmpowerAuthError as exc:
             log.warning("Auth error in tool call: %s", exc)
-            return (
-                f"Error: {exc}\n\n"
+            raise ToolError(
+                f"{exc}\n\n"
                 "Session is expired or invalid. Call start_authentication to "
                 "begin re-auth, then complete_authentication with the "
                 "verification code if 2FA is required."
-            )
+            ) from exc
         except EmpowerNetworkError as exc:
             log.warning("Network error in tool call: %s", exc)
-            return f"Error: Network request to Empower failed — {exc}. Check connection and retry."
+            raise ToolError(
+                f"Network request to Empower failed — {exc}. Check connection and retry."
+            ) from exc
         except EmpowerAPIError as exc:
             log.warning("API error in tool call: %s", exc)
-            return f"Error: {exc}"
+            raise ToolError(str(exc)) from exc
         except requests.RequestException as exc:
             # Defensive fallback: client._request wraps these as EmpowerNetworkError,
             # so this branch shouldn't fire in practice — kept in case a future code
             # path bypasses _request().
             log.warning("Unwrapped network error in tool call: %s", exc)
-            return f"Error: Network request failed — {exc}"
+            raise ToolError(f"Network request failed — {exc}") from exc
         except ValueError as exc:
             # The response validators raise ValueError when the API's response
-            # shape drifts. Since mcp 2.1, an exception that escapes a tool
-            # reaches the model only as "Error executing tool <name>", so
-            # surface the detail here.
+            # shape drifts.
             log.warning("Unexpected API response in tool call: %s", exc)
-            return f"Error: unexpected API response — {exc}"
+            raise ToolError(f"Unexpected API response — {exc}") from exc
 
     return wrapper
 
@@ -263,13 +327,16 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
     Each call that hits the 2FA branch dispatches a fresh SMS — call
     sparingly to avoid spamming the user. State is process-local; if the
     MCP server restarts mid-flow, call this again to begin a new challenge.
+
+    Errors: the call fails (isError) when credentials are missing, Empower
+    rejects the sign-in, or the network fails.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
     email = os.getenv("EMPOWER_EMAIL")
     password = os.getenv("EMPOWER_PASSWORD")
     if not email or not password:
-        return (
-            "Error: EMPOWER_EMAIL and/or EMPOWER_PASSWORD not set. "
+        raise ToolError(
+            "EMPOWER_EMAIL and/or EMPOWER_PASSWORD not set. "
             "Add them to the 'env' block of your MCP server config "
             "and restart the MCP server."
         )
@@ -289,16 +356,16 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
         try:
             mode = parse_2fa_mode_env(env_mode) if env_mode else TwoFactorMode.SMS
         except EmpowerAuthError as exc:
-            return f"Error: {exc}"
+            raise ToolError(str(exc)) from exc
         try:
             fresh_client.send_2fa_challenge(mode)
         except EmpowerNetworkError as exc:
-            return (
-                f"Error: network failure dispatching 2FA challenge — {exc}. "
+            raise ToolError(
+                f"Network failure dispatching 2FA challenge — {exc}. "
                 "Check connection and try again."
-            )
+            ) from exc
         except (EmpowerAuthError, EmpowerAPIError) as exc:
-            return f"Error: 2FA challenge dispatch failed: {exc}"
+            raise ToolError(f"2FA challenge dispatch failed: {exc}") from exc
         # Commit the partial-auth-state client so complete_authentication
         # can verify against the same cookies the challenge was issued on.
         app_ctx.client = fresh_client
@@ -308,12 +375,14 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
             "Call complete_authentication with the verification code."
         )
     except EmpowerNetworkError as exc:
-        return f"Error: network failure during login — {exc}. Check connection and try again."
+        raise ToolError(
+            f"Network failure during login — {exc}. Check connection and try again."
+        ) from exc
     except LoginRejectedError as exc:
         # Message starts "Empower rejected the sign-in", distinct from transient failures.
-        return f"Error: {exc}"
+        raise ToolError(str(exc)) from exc
     except (EmpowerAuthError, EmpowerAPIError) as exc:
-        return f"Error: authentication failed: {exc}"
+        raise ToolError(f"Authentication failed: {exc}") from exc
 
     # No-2FA path: device remembered, login completed directly.
     # Clear pending_2fa_mode in case a prior start_authentication call set
@@ -330,14 +399,18 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
 
     Call this after start_authentication has dispatched a 2FA challenge.
     Pass the verification code that was sent to the user's phone via SMS.
+
+    Errors: the call fails (isError) on a wrong code (call
+    start_authentication for a new one), a rejected password, or no pending
+    challenge.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
     if app_ctx.pending_2fa_mode is None:
-        return "Error: no pending 2FA challenge. Call start_authentication first."
+        raise ToolError("No pending 2FA challenge. Call start_authentication first.")
     password = os.getenv("EMPOWER_PASSWORD")
     if not password:
-        return (
-            "Error: EMPOWER_PASSWORD no longer set. "
+        raise ToolError(
+            "EMPOWER_PASSWORD no longer set. "
             "Restart the MCP server with the env var set and try again."
         )
     mode = app_ctx.pending_2fa_mode
@@ -347,20 +420,21 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
         # Don't clear pending_2fa_mode — the code may still be valid;
         # the agent can retry complete_authentication once connectivity
         # recovers without dispatching a fresh challenge.
-        return (
-            f"Error: network failure during 2FA verification — {exc}. "
-            "Try complete_authentication again."
-        )
+        raise ToolError(
+            f"Network failure during 2FA verification — {exc}. Try complete_authentication again."
+        ) from exc
     except LoginRejectedError as exc:
         # The code was accepted but Empower rejected the password.
         app_ctx.pending_2fa_mode = None
-        return f"Error: {exc}"
+        raise ToolError(str(exc)) from exc
     except (EmpowerAuthError, EmpowerAPIError) as exc:
         # Wrong code or server rejection — clear state so the agent can
         # restart cleanly via start_authentication. The client's message
         # already starts "2FA verification failed: ...".
         app_ctx.pending_2fa_mode = None
-        return f"Error: {str(exc).rstrip('.')}. Call start_authentication to send a new code."
+        raise ToolError(
+            f"{str(exc).rstrip('.')}. Call start_authentication to send a new code."
+        ) from exc
     app_ctx.pending_2fa_mode = None
     app_ctx.client.save_session()
     return "Authenticated."
@@ -404,7 +478,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
     #
     # These deliberately do NOT use @_handle_tool_errors — that decorator
     # would direct callers BACK to start_authentication on EmpowerAuthError,
-    # producing a self-referential error loop. Errors are handled inline
+    # producing a self-referential error loop. Errors are raised as ToolError
     # inside the module-level start_authentication / complete_authentication
     # implementations.
 
@@ -428,13 +502,12 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         with net worth, total assets, and total liabilities.
         No parameters required.
 
-        Errors: returns an error message if the session is expired — call
-        start_authentication to begin re-auth, then complete_authentication
-        with the verification code if 2FA is required.
+        Errors: the call fails (isError) if the session is expired, with a
+        message saying to call start_authentication, then
+        complete_authentication with the verification code if 2FA is required.
         """
         client = _get_client(ctx)
-        result = client.get_accounts()
-        return _enforce_char_cap(serialize_result(result))
+        return _render(client.get_accounts(), undated=("accounts",))
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -444,30 +517,28 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         """Fetch transactions within a date range.
 
         Returns transactions with amounts, descriptions, categories, and merchant info,
-        plus unique categories and a cashflow summary (money in, money out, net).
-        The summary and categories are always returned in full regardless of limit.
+        plus unique categories and a cashflow summary (money in, money out, net)
+        for the whole requested range. The summary and categories are always complete.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             limit: Maximum number of transactions to return (default 100).
-                Use a smaller value for quick lookups or a larger value when
-                you need more detail. Summary is always complete.
+                When there are more, the newest whole days are kept and
+                ``truncated.next_end_date`` says where to page back from. The
+                newest day is always returned in full, even if it alone
+                exceeds limit.
 
-        Errors: returns an error message if start_date is after end_date,
-        or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the verification code
-        if 2FA is required.
+        Errors: the call fails (isError) if start_date is after end_date or
+        limit < 1. If the session is expired, it fails with a message saying to call
+        start_authentication, then complete_authentication with the
+        verification code if 2FA is required.
         """
-        if err := _validate_date_range(start_date, end_date):
-            return err
-        if limit < 1:
-            return "Error: limit must be at least 1."
+        _check_date_range(start_date, end_date)
+        _check_limit(limit)
         client = _get_client(ctx)
         result = client.get_transactions(start_date, end_date)
-        output = serialize_result(result)
-        output = _apply_limit(output, "transactions", limit)
-        return _enforce_char_cap(output)
+        return _render(result, dated=("transactions",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -478,21 +549,17 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         cost basis, and fees, plus the total portfolio value.
 
         Args:
-            limit: Maximum number of holdings to return (default 100).
-                Use a smaller value for quick lookups or a larger value when
-                you need more detail. Total value is always complete.
+            limit: Maximum number of holdings to return (default 100). The
+                first holdings are kept. Total value is always complete.
 
-        Errors: returns an error message if the session is expired — call
-        start_authentication to begin re-auth, then complete_authentication
-        with the verification code if 2FA is required.
+        Errors: the call fails (isError) if limit < 1.
+        If the session is expired, it fails with a message saying to call
+        start_authentication, then complete_authentication with the
+        verification code if 2FA is required.
         """
-        if limit < 1:
-            return "Error: limit must be at least 1."
+        _check_limit(limit)
         client = _get_client(ctx)
-        result = client.get_holdings()
-        output = serialize_result(result)
-        output = _apply_limit(output, "holdings", limit)
-        return _enforce_char_cap(output)
+        return _render(client.get_holdings(), undated=("holdings",), limit=limit)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -502,30 +569,26 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         """Fetch daily net worth history with change summary.
 
         Returns daily net worth entries broken down by asset/liability category,
-        plus a summary with percentage and value changes over the period.
-        The summary is always returned in full regardless of limit.
+        plus a summary with percentage and value changes over the requested range.
+        The summary is always complete.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             limit: Maximum number of daily entries to return (default 180).
-                Use a smaller value for quick lookups or a larger value when
-                you need more detail. Summary is always complete.
+                When there are more, the newest days are kept and
+                ``truncated.next_end_date`` says where to page back from.
 
-        Errors: returns an error message if start_date is after end_date,
-        or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the verification code
-        if 2FA is required.
+        Errors: the call fails (isError) if start_date is after end_date or
+        limit < 1. If the session is expired, it fails with a message saying to call
+        start_authentication, then complete_authentication with the
+        verification code if 2FA is required.
         """
-        if err := _validate_date_range(start_date, end_date):
-            return err
-        if limit < 1:
-            return "Error: limit must be at least 1."
+        _check_date_range(start_date, end_date)
+        _check_limit(limit)
         client = _get_client(ctx)
         result = client.get_net_worth(start_date, end_date)
-        output = serialize_result(result)
-        output = _apply_limit(output, "entries", limit)
-        return _enforce_char_cap(output)
+        return _render(result, dated=("entries",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -536,29 +599,27 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
 
         Returns daily balances for each account, with account ID and balance
         amount, plus a summary with account count, latest date, and total
-        balance. The summary is always returned in full regardless of limit.
+        balance. The summary is always complete.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             limit: Maximum number of balance entries to return (default 500).
-                Use a smaller value for quick lookups or a larger value when
-                you need more detail. Summary is always complete.
+                When there are more, the newest whole days are kept (every
+                account for each day shown) and ``truncated.next_end_date``
+                says where to page back from. The newest day is always
+                returned in full, even if it alone exceeds limit.
 
-        Errors: returns an error message if start_date is after end_date,
-        or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the verification code
-        if 2FA is required.
+        Errors: the call fails (isError) if start_date is after end_date or
+        limit < 1. If the session is expired, it fails with a message saying to call
+        start_authentication, then complete_authentication with the
+        verification code if 2FA is required.
         """
-        if err := _validate_date_range(start_date, end_date):
-            return err
-        if limit < 1:
-            return "Error: limit must be at least 1."
+        _check_date_range(start_date, end_date)
+        _check_limit(limit)
         client = _get_client(ctx)
         result = client.get_account_balances(start_date, end_date)
-        output = serialize_result(result)
-        output = _apply_limit(output, "balances", limit)
-        return _enforce_char_cap(output)
+        return _render(result, dated=("balances",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -573,11 +634,18 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
 
         Use get_holdings (not get_accounts) to discover account IDs — get_accounts
         may not list all accounts that have holdings (e.g. employer 401k plans,
-        crypto exchanges). For large portfolios, query a few accounts at a time.
+        crypto exchanges). An empty list returns every investment account. IDs
+        Empower doesn't recognize return empty investments and account_summaries
+        (benchmarks still come back). For large portfolios, query a few accounts
+        at a time.
 
-        Returns daily investment performance per account, daily benchmark (S&P 500)
-        performance, and per-account summaries with balance, fees, income, and returns.
-        Account summaries are always returned in full regardless of limit.
+        Returns daily investment performance per account, daily performance of
+        Empower's benchmark indexes (^PC_US_STOCKS, ^PC_US_BONDS, ^PC_INTL_STOCKS,
+        ^PC_INTL_BONDS, ^PC_ALTERNATIVES, ^PC_BLENDED; not the S&P 500), and
+        per-account summaries with balance, income, and returns. Account
+        summaries are always complete. Histories start with a baseline row
+        (value 0) on the trading day before start_date, or the first available
+        date.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
@@ -585,47 +653,53 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             account_ids: List of investment account IDs (integers). Use get_holdings to
                 find user_account_id values for investment accounts.
             limit: Maximum number of entries to return for each of the investments
-                and benchmarks lists (default 500). Account summaries are always
-                complete. Use a smaller value for quick lookups.
+                and benchmarks lists (default 500). When there are more, the
+                newest days are kept for both lists and ``truncated.next_end_date``
+                says where to page back from.
 
-        Errors: returns an error message if start_date is after end_date,
-        or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the verification code
-        if 2FA is required.
+        Errors: the call fails (isError) if start_date is after end_date or
+        limit < 1. If the session is expired, it fails with a message saying to call
+        start_authentication, then complete_authentication with the
+        verification code if 2FA is required.
         """
-        if err := _validate_date_range(start_date, end_date):
-            return err
-        if limit < 1:
-            return "Error: limit must be at least 1."
+        _check_date_range(start_date, end_date)
+        _check_limit(limit)
         client = _get_client(ctx)
         result = client.get_performance(start_date, end_date, account_ids)
-        output = serialize_result(result)
-        output = _apply_limit(output, "investments", limit)
-        output = _apply_limit(output, "benchmarks", limit)
-        return _enforce_char_cap(output)
+        return _render(
+            result, dated=("investments", "benchmarks"), limit=limit, start_date=start_date
+        )
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
     def get_quotes(ctx: Context[_AppContext], start_date: date, end_date: date) -> str:
         """Fetch portfolio vs S&P 500 comparison, portfolio snapshot, and market quotes.
 
-        Returns daily portfolio vs benchmark values, a current portfolio snapshot
+        Returns daily portfolio vs S&P 500 values, a current portfolio snapshot
         (last value, change, percent change), and individual market quote data.
+        In portfolio_vs_benchmark, portfolio_value and sp500_value are Empower's
+        "YOU" and "^INX" series: cumulative percent change since the first day,
+        not dollar values. The series starts with a baseline row (value 0) on
+        the trading day before start_date.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
 
-        Errors: returns an error message if start_date is after end_date,
-        or if the session is expired — in which case call start_authentication
-        to begin re-auth, then complete_authentication with the verification code
-        if 2FA is required.
+        Errors: the call fails (isError) if start_date is after end_date.
+        If the session is expired, it fails with a message saying to call
+        start_authentication, then complete_authentication with the
+        verification code if 2FA is required.
         """
-        if err := _validate_date_range(start_date, end_date):
-            return err
+        _check_date_range(start_date, end_date)
         client = _get_client(ctx)
         result = client.get_quotes(start_date, end_date)
-        return _enforce_char_cap(serialize_result(result))
+        return _render(
+            result,
+            dated=("portfolio_vs_benchmark",),
+            undated=("market_quotes",),
+            start_date=start_date,
+        )
 
     @mcp.tool(structured_output=False)
     @_handle_tool_errors
@@ -640,7 +714,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         interval types (MONTH, WEEK, YEAR) regardless of what you send.
 
         Returns spending data with average, current, and target amounts plus
-        daily details within each interval.
+        details within each interval (daily for MONTH and WEEK, monthly for YEAR).
 
         Args:
             start_date: Optional. Sent to API but has no observable effect on
@@ -650,15 +724,15 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             interval: Sent to API but has no observable effect — all three intervals
                 are always returned. Defaults to MONTH.
 
-        Errors: returns an error message if the session is expired — call
-        start_authentication to begin re-auth, then complete_authentication
-        with the verification code if 2FA is required.
+        Errors: the call fails (isError) if the session is expired, with a
+        message saying to call start_authentication, then
+        complete_authentication with the verification code if 2FA is required.
         """
         today = date.today()
         effective_start = start_date or today
         effective_end = end_date or today
         client = _get_client(ctx)
         result = client.get_spending(effective_start, effective_end, interval)
-        return _enforce_char_cap(serialize_result(result))
+        return _render(result, undated=("intervals",))
 
     return mcp

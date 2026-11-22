@@ -73,6 +73,15 @@ The orchestrator handles SMS code pickup; `pc2` reads the code from stdin.
 
 The `pc2` command outputs structured JSON (data to stdout, errors to stderr) and follows an [agent-first design](https://dev.to/uenyioha/writing-cli-tools-that-ai-agents-actually-want-to-use-39no): every error has a machine-readable type and recovery suggestion, exit codes are meaningful, and the help text is self-documenting.
 
+JSON output is the API call's full result, the same shape the Python API and MCP tools return, summaries included:
+
+```bash
+pc2 accounts | jq '.summary.networth'       # {"accounts": [...], "summary": {...}}
+pc2 transactions --start 90d | jq '.transactions[] | select(.category_name == "Groceries")'
+```
+
+`--format csv` prints the command's table (for example, just the accounts rows).
+
 ```bash
 pc2 accounts                                # all linked accounts
 pc2 transactions --start 90d                # last 90 days of transactions
@@ -136,7 +145,7 @@ When the cached session expires mid-conversation, the agent recovers in chat wit
 
 > Note: `EMPOWER_PASSWORD` sits plaintext in the MCP client config — standard pattern for MCP servers, but worth knowing.
 
-The server is token-aware — large responses are automatically truncated to fit within context limits (~12,500 tokens by default, configurable via `PC2_MCP_MAX_CHARS`), while summaries are always preserved in full.
+The server is token-aware. Responses are compact JSON capped at ~12,500 tokens (configurable via `PC2_MCP_MAX_CHARS`), and summaries are always complete. When a date-based list (transactions, net worth, balances, performance) doesn't fit, the newest whole days are kept and `truncated.next_end_date` tells the agent where to page back from. Tool errors come back with `isError: true`.
 
 ## Known API quirks
 
@@ -146,6 +155,11 @@ This library uses Empower's unofficial internal web API, which is not affiliated
 - **`performance` and `benchmarks` share one API call.** `get_performance()` returns both in a single `PerformanceResult`.
 - **`get_accounts` may not list all accounts with holdings.** Some accounts (employer 401k plans, crypto exchanges) can appear in `get_holdings`, `get_account_balances`, and `get_performance` but not in `get_accounts`. Use `get_holdings` to discover investment account IDs.
 - **Fee fields can be `NaN`.** The API returns `"NaN"` for `fees_per_year`, `fund_fees`, `total_fee`, and `advisory_fee_percentage` on some investment accounts (401k plans, crypto, RSUs). These are coerced to `None` — the account is not dropped.
+- **Benchmarks are Empower's blended indexes.** `benchmarks` in `get_performance` are `^PC_US_STOCKS`, `^PC_US_BONDS`, `^PC_INTL_STOCKS`, `^PC_INTL_BONDS`, `^PC_ALTERNATIVES` and `^PC_BLENDED`, not the S&P 500. The S&P 500 is in `get_quotes`.
+- **`portfolio_vs_benchmark` values are percentages.** `portfolio_value` and `sp500_value` come from the API's `YOU` and `^INX` series: cumulative percent change since the first day of the range, not dollar values.
+- **Histories start with a baseline row.** Performance and quotes histories begin on the trading day before `start_date` (or the first available date) with a value of 0.
+- **Unknown account IDs aren't an error.** `get_performance` with IDs Empower doesn't recognize returns empty `investments` and `account_summaries`; benchmarks still come back. An empty list returns every investment account.
+- **Row order isn't guaranteed.** Transactions came back newest-first in 2026-03 and oldest-first on 2026-11-21 with the same request (the client asks for newest-first; Empower doesn't reliably honor it). Sort by `date` if order matters.
 - **`get_spending` ignores date range and interval.** The API always returns current-period spending for all three interval types (MONTH, WEEK, YEAR), regardless of the `start_date`, `end_date`, or `interval` parameters.
 - **Only email-address logins are supported.** Accounts that sign in with a username get `LoginRejectedError` with Empower's code (113 or 207). Those accounts go through Empower's newer login, which this library doesn't support yet ([#9](https://github.com/wpwilson10/personalcapital2/issues/9)).
 - **Sessions expire.** Typically ~24 hours, sometimes sooner. CLI users run `pc2 login` again; MCP users let the agent call `start_authentication` / `complete_authentication`. Stale-session recovery handles this automatically when `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` are set.

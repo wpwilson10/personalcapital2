@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — unreleased
+
+### Breaking
+
+- **CLI JSON output is the full result**, the same container the Python API
+  and MCP tools return, instead of a bare list of rows. Summaries that were
+  dropped before (net worth totals, `total_value`, the cashflow summary,
+  `account_summaries`) are now included. Update scripts from
+  `pc2 accounts | jq '.[]'` to `jq '.accounts[]'` (see the key table in
+  `docs/cli.md`). Commands that share an API call (`transactions`/`categories`,
+  `performance`/`benchmarks`, `portfolio`/`snapshot`) print the same JSON.
+  `--format csv` is unchanged.
+- **MCP tool errors set `isError: true`.** They were returned as ordinary
+  results starting with `Error:`. The text now reads
+  `Error executing tool <name>: <message>` (the MCP SDK's prefix; ours is gone).
+  `start_authentication` and `complete_authentication` failures work the same way.
+- **MCP truncation keeps the newest days.** Date-based lists (transactions, net
+  worth, balances, performance, portfolio vs benchmark) used to keep their
+  first rows. Because Empower returns them oldest-first, the most recent data
+  was cut, and balances lost whole accounts. Now the newest whole days are
+  kept, with one cutoff shared by every list in the response, and
+  `truncated.next_end_date` says where to page back from. `limit` is a soft
+  maximum: the newest day is always returned whole.
+- **MCP responses are compact JSON** (no indentation), so 23–36% more rows fit
+  under `PC2_MCP_MAX_CHARS`.
+
+### Fixed
+
+- An out-of-range date shortcut (`--start 1000000d`) is a usage error (exit 2)
+  instead of a traceback with exit 1.
+- Piping into a reader that closes early (`pc2 transactions | head`) exits
+  quietly with 141 instead of printing a `BrokenPipeError` and exiting 4.
+- The `--account-ids` usage error suggests `pc2 holdings`, which lists every
+  investment account; `pc2 accounts` can miss some.
+- `pc2 mcp --help` shows `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` in the client
+  config (needed for in-chat re-authentication) and quotes the install command.
+
+### Documentation
+
+- Known API quirks: benchmarks are Empower's `^PC_*` blended indexes;
+  `portfolio_vs_benchmark` values are cumulative percent changes; histories
+  start with a baseline row; unknown account IDs return empty results; row
+  order isn't guaranteed.
+
 ## [0.5.0] — 2026-11-21
 
 ### Changed

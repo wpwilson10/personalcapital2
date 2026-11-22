@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from datetime import date, timedelta
 from decimal import Decimal
@@ -22,7 +23,6 @@ from personalcapital2.cli import (
     _parse_account_ids,
     _parse_date,
     _serialize_csv,
-    _serialize_json,
     _validate_dates,
     build_parser,
     main,
@@ -163,6 +163,34 @@ def test_parse_date_invalid_iso() -> None:
         _parse_date("2026-13-01")
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "1000000d",
+        "99999999999d",
+        "mb-99999999999",
+        "me-99999999999999999999",
+        "yb-5000",
+        "ye-99999999999999999999",
+    ],
+)
+def test_parse_date_out_of_range(value: str) -> None:
+    """Out-of-range shortcuts raise the same usage error as malformed dates."""
+    with pytest.raises(argparse.ArgumentTypeError, match=f"invalid date '{value}'"):
+        _parse_date(value)
+
+
+def test_out_of_range_date_is_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """An overflowing date exits 2 with a JSON UsageError, not a traceback."""
+    with pytest.raises(SystemExit) as exc_info:
+        main(["net-worth", "--start", "1000000d"])
+
+    assert exc_info.value.code == EXIT_USAGE
+    err = json.loads(capsys.readouterr().err)
+    assert err["type"] == "UsageError"
+    assert "invalid date '1000000d'" in err["error"]
+
+
 # --- _parse_account_ids unit tests ---
 
 
@@ -240,26 +268,6 @@ def _sample_transaction() -> Transaction:
         currency="USD",
         is_duplicate=False,
     )
-
-
-def test_serialize_json_models() -> None:
-    items: list[object] = [_sample_account()]
-    result = _serialize_json(items)
-    parsed = json.loads(result)
-    assert len(parsed) == 1
-    assert parsed[0]["user_account_id"] == 100
-    assert parsed[0]["name"] == "Checking"
-
-
-def test_serialize_json_empty() -> None:
-    assert _serialize_json([]) == "[]"
-
-
-def test_serialize_json_dates_become_strings() -> None:
-    items: list[object] = [_sample_account()]
-    result = _serialize_json(items)
-    parsed = json.loads(result)
-    assert parsed[0]["created_at"] == "2024-01-01"
 
 
 def test_json_default_raises_on_unknown_type() -> None:
@@ -445,7 +453,7 @@ def test_argparse_account_ids_error_has_suggestion(capsys: pytest.CaptureFixture
     captured = capsys.readouterr()
     err = json.loads(captured.err)
     assert err["type"] == "UsageError"
-    assert err["suggestion"] == "List account IDs with: pc2 accounts"
+    assert err["suggestion"] == "List account IDs with: pc2 holdings"
 
 
 # --- Help text tests ---
@@ -578,8 +586,10 @@ def test_cmd_accounts_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert len(parsed) == 1
-    assert parsed[0]["user_account_id"] == 100
+    assert set(parsed) == {"accounts", "summary"}
+    assert len(parsed["accounts"]) == 1
+    assert parsed["accounts"][0]["user_account_id"] == 100
+    assert parsed["summary"]["networth"] == 100000
 
 
 def test_cmd_accounts_csv(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -629,7 +639,9 @@ def test_cmd_transactions_json(tmp_path: Path, capsys: pytest.CaptureFixture[str
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["amount"] == 42.50
+    assert set(parsed) == {"transactions", "categories", "summary"}
+    assert parsed["transactions"][0]["amount"] == 42.50
+    assert parsed["summary"]["net_cashflow"] == 500
 
 
 def test_cmd_categories_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -650,7 +662,9 @@ def test_cmd_categories_json(tmp_path: Path, capsys: pytest.CaptureFixture[str])
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["name"] == "Groceries"
+    # categories shares get_transactions, so its JSON is the full transactions result
+    assert set(parsed) == {"transactions", "categories", "summary"}
+    assert parsed["categories"][0]["name"] == "Groceries"
 
 
 def test_cmd_holdings_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -685,7 +699,8 @@ def test_cmd_holdings_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["ticker"] == "VTI"
+    assert parsed["holdings"][0]["ticker"] == "VTI"
+    assert parsed["total_value"] == 12500
 
 
 def test_cmd_net_worth_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -714,7 +729,8 @@ def test_cmd_net_worth_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["networth"] == 150000.0
+    assert parsed["entries"][0]["networth"] == 150000.0
+    assert parsed["summary"]["date_range_change"] == 5000
 
 
 def test_cmd_balances_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -737,7 +753,8 @@ def test_cmd_balances_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["balance"] == 5432.10
+    assert parsed["balances"][0]["balance"] == 5432.10
+    assert parsed["summary"]["account_count"] == 1
 
 
 def test_cmd_performance_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -772,7 +789,8 @@ def test_cmd_performance_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["performance"] == 0.0823
+    assert set(parsed) == {"investments", "benchmarks", "account_summaries"}
+    assert parsed["investments"][0]["performance"] == 0.0823
 
 
 def test_cmd_benchmarks_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -807,7 +825,8 @@ def test_cmd_benchmarks_json(tmp_path: Path, capsys: pytest.CaptureFixture[str])
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["benchmark"] == "^INX"
+    assert set(parsed) == {"investments", "benchmarks", "account_summaries"}
+    assert parsed["benchmarks"][0]["benchmark"] == "^INX"
 
 
 def test_cmd_portfolio_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -834,7 +853,8 @@ def test_cmd_portfolio_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["portfolio_value"] == 105.5
+    assert set(parsed) == {"portfolio_vs_benchmark", "snapshot", "market_quotes"}
+    assert parsed["portfolio_vs_benchmark"][0]["portfolio_value"] == 105.5
 
 
 def test_cmd_snapshot_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -865,6 +885,7 @@ def test_cmd_snapshot_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
+    assert set(parsed) == {"portfolio_vs_benchmark", "snapshot", "market_quotes"}
     assert parsed["snapshot"]["last"] == 780000
     assert parsed["market_quotes"][0]["ticker"] == "^INX"
 
@@ -944,8 +965,8 @@ def test_cmd_spending_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -
 
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["type"] == "MONTH"
-    assert parsed[0]["current"] == 3673.54
+    assert parsed["intervals"][0]["type"] == "MONTH"
+    assert parsed["intervals"][0]["current"] == 3673.54
 
 
 def test_cmd_raw_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1392,7 +1413,7 @@ def test_data_command_recovers_from_stale_session(
     assert fresh_client.get_accounts.call_count == 1
     captured = capsys.readouterr()
     parsed = json.loads(captured.out)
-    assert parsed[0]["user_account_id"] == 100
+    assert parsed["accounts"][0]["user_account_id"] == 100
 
 
 def test_singleton_exception_group_is_unwrapped(
@@ -1495,3 +1516,49 @@ def test_mcp_import_failure(
     assert err["type"] == "ImportError"
     assert expected_error in err["error"]
     assert err["suggestion"] == expected_suggestion
+
+
+# --- Broken pipe (subprocess: the fix rewires fd 1, which pytest owns in-process) ---
+
+_BIG_OUTPUT_SCRIPT = """
+import sys
+import personalcapital2.cli as cli
+
+def _big(args):
+    sys.stdout.write("x" * 1_000_000)
+
+cli.cmd_status = _big
+cli.main(sys.argv[1:])
+"""
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "from personalcapital2.cli import main; main()",  # small output: fails at flush
+        _BIG_OUTPUT_SCRIPT,  # large output: fails mid-write
+    ],
+    ids=["small", "large"],
+)
+def test_broken_pipe_exits_quietly(tmp_path: Path, script: str) -> None:
+    """A reader that closes stdout early gets exit 141 and no stderr noise."""
+    import os
+    import subprocess
+    import sys
+
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)  # the "reader" is gone before pc2 writes anything
+    try:
+        proc = subprocess.run(  # noqa: S603 — fixed interpreter and inline test script
+            [sys.executable, "-c", script, "status", "--session", str(tmp_path / "s.json")],
+            stdout=write_fd,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    finally:
+        os.close(write_fd)
+
+    assert proc.returncode == 141
+    assert proc.stderr == ""
