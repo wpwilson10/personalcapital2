@@ -5,6 +5,60 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-11-22
+
+### Fixed
+
+- **`pc2` no longer blocks on stdin without a terminal.** A data command that
+  needed a new login, or `pc2 login` without `EMPOWER_EMAIL`/`EMPOWER_PASSWORD`,
+  read the email and password from stdin. With stdin as an open pipe, as many
+  agent harnesses leave it, the command waited forever. It now fails at once
+  with exit 1.
+- **Data commands no longer send an SMS no one can enter.** With credentials
+  set and no terminal, re-authenticating after an expired session sent the SMS
+  code, then waited for it on stdin or failed. Each retry sent another. Now the
+  command fails before sending, and says `No code was sent.`
+- **MCP: an abandoned 2FA challenge no longer hides a terminal login.** While a
+  challenge from `start_authentication` was pending, data tools stopped
+  reloading the session file, so a session saved by `pc2 login` was never
+  picked up. The challenge now lives on its own client, and data tools always
+  reload.
+
+### Changed
+
+- **CLI auth errors say what was wrong with the session.** When a data command
+  needs a login it can't do, `error` starts with `No saved session at ...`,
+  `The saved session has expired.` or `The saved session at ... is unusable.`,
+  then says why it couldn't sign in. The `type` is still `EmpowerAuthError`.
+- **The `suggestion` for CLI auth errors** is now
+  ``Ask the user to run `pc2 login` in a terminal, then retry.`` (was
+  `pc2 login`). An agent that runs `pc2 login` itself, without a way to read the
+  SMS, can't finish it.
+- **`pc2 login` without a terminal reads only the SMS code from stdin.** The
+  email and password must come from `EMPOWER_EMAIL`/`EMPOWER_PASSWORD`. Reading
+  them from piped stdin was never documented and no longer works.
+- **MCP auth errors give one next step that can work.** With credentials set,
+  they point to `start_authentication` as before. Without them, they ask the
+  user to run `pc2 login` in a terminal. The `start_authentication`
+  missing-credentials error offers the same.
+
+### Added
+
+- `interactive` keyword argument on `authenticate()` and `run_authenticated()`
+  (default `True`, the old behavior). With `False`, nothing is read from stdin
+  and a login that needs an SMS code raises `InteractiveAuthRequired` before
+  the code is sent.
+
+### Documentation
+
+- The headless login example works: it started `pc2 login` with the
+  credentials applied to `printf` instead, and piped a code that couldn't exist
+  yet.
+- Stale-session recovery is described as working only when Empower doesn't ask
+  for a new SMS code.
+- `pc2 status` reads only the session file; `"exists": true` doesn't mean the
+  session is still valid.
+
 ## [0.6.0] — 2026-11-21
 
 ### Breaking

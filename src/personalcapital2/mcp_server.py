@@ -82,6 +82,10 @@ class _AppContext:
     client: EmpowerClient
     session_path: Path
     pending_2fa_mode: TwoFactorMode | None = None
+    # The client a 2FA challenge was sent from. complete_authentication verifies
+    # against its in-memory cookies, so it is kept apart from ``client``, which
+    # data tools reload from disk on every call.
+    pending_client: EmpowerClient | None = None
 
 
 def _get_client(ctx: Context[_AppContext]) -> EmpowerClient:
@@ -90,17 +94,20 @@ def _get_client(ctx: Context[_AppContext]) -> EmpowerClient:
     Reloads the session from disk on each call so the long-running server
     picks up fresh sessions after re-authentication — whether via
     ``pc2 login`` from another terminal or via ``start_authentication`` /
-    ``complete_authentication`` MCP tools.
-
-    Skips the reload during a 2FA window: ``load_session()`` replaces
-    ``self._session.cookies`` (not merge), which would clobber the in-memory
-    challenge cookies that ``complete_authentication`` needs to verify
-    against — leaving the agent with a mysterious verification failure.
+    ``complete_authentication`` MCP tools. That holds during a pending 2FA
+    challenge too: the challenge lives on ``pending_client``, so an abandoned
+    challenge never stops a terminal login from being picked up.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
-    if app_ctx.pending_2fa_mode is None:
-        app_ctx.client.load_session()
+    app_ctx.client.load_session()
     return app_ctx.client
+
+
+def _has_credentials() -> bool:
+    return bool(os.getenv("EMPOWER_EMAIL") and os.getenv("EMPOWER_PASSWORD"))
+
+
+_TERMINAL_LOGIN = "Ask the user to run `pc2 login` in a terminal, then retry."
 
 
 def _check_date_range(start_date: date, end_date: date) -> None:
@@ -303,12 +310,19 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
             return fn(*args, **kwargs)
         except EmpowerAuthError as exc:
             log.warning("Auth error in tool call: %s", exc)
-            raise ToolError(
-                f"{exc}\n\n"
-                "Session is expired or invalid. Call start_authentication to "
-                "begin re-auth, then complete_authentication with the "
-                "verification code if 2FA is required."
-            ) from exc
+            # One next step, and one that can work: without credentials,
+            # start_authentication always fails.
+            if _has_credentials():
+                next_step = (
+                    "Call start_authentication to begin re-auth, then "
+                    "complete_authentication with the verification code if 2FA is required."
+                )
+            else:
+                next_step = (
+                    "This server has no EMPOWER_EMAIL/EMPOWER_PASSWORD to sign in with. "
+                    + _TERMINAL_LOGIN
+                )
+            raise ToolError(f"{exc}\n\nSession is expired or invalid. {next_step}") from exc
         except EmpowerNetworkError as exc:
             log.warning("Network error in tool call: %s", exc)
             raise ToolError(
@@ -352,9 +366,9 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
     password = os.getenv("EMPOWER_PASSWORD")
     if not email or not password:
         raise ToolError(
-            "EMPOWER_EMAIL and/or EMPOWER_PASSWORD not set. "
-            "Add them to the 'env' block of your MCP server config "
-            "and restart the MCP server."
+            "EMPOWER_EMAIL and/or EMPOWER_PASSWORD not set, so this server can't sign in. "
+            f"{_TERMINAL_LOGIN} To sign in from chat instead, add both to the "
+            "'env' block of the MCP server config and restart the MCP server."
         )
 
     # Mint a fresh client per attempt (mirrors authenticate() at auth.py).
@@ -382,9 +396,10 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
             ) from exc
         except (EmpowerAuthError, EmpowerAPIError) as exc:
             raise ToolError(f"2FA challenge dispatch failed: {exc}") from exc
-        # Commit the partial-auth-state client so complete_authentication
-        # can verify against the same cookies the challenge was issued on.
-        app_ctx.client = fresh_client
+        # Keep the partial-auth-state client so complete_authentication can
+        # verify against the same cookies the challenge was issued on. It stays
+        # out of app_ctx.client so data tools keep reloading the session file.
+        app_ctx.pending_client = fresh_client
         app_ctx.pending_2fa_mode = mode
         return (
             f"2FA challenge sent via {mode.value}. "
@@ -407,6 +422,7 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
     fresh_client.save_session()
     app_ctx.client = fresh_client
     app_ctx.pending_2fa_mode = None
+    app_ctx.pending_client = None
     return "Authenticated."
 
 
@@ -421,7 +437,8 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
     challenge.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
-    if app_ctx.pending_2fa_mode is None:
+    pending_client = app_ctx.pending_client
+    if app_ctx.pending_2fa_mode is None or pending_client is None:
         raise ToolError("No pending 2FA challenge. Call start_authentication first.")
     password = os.getenv("EMPOWER_PASSWORD")
     if not password:
@@ -431,7 +448,7 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
         )
     mode = app_ctx.pending_2fa_mode
     try:
-        app_ctx.client.verify_2fa_and_login(mode, code, password)
+        pending_client.verify_2fa_and_login(mode, code, password)
     except EmpowerNetworkError as exc:
         # Don't clear pending_2fa_mode — the code may still be valid;
         # the agent can retry complete_authentication once connectivity
@@ -442,17 +459,21 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
     except LoginRejectedError as exc:
         # The code was accepted but Empower rejected the password.
         app_ctx.pending_2fa_mode = None
+        app_ctx.pending_client = None
         raise ToolError(str(exc)) from exc
     except (EmpowerAuthError, EmpowerAPIError) as exc:
         # Wrong code or server rejection — clear state so the agent can
         # restart cleanly via start_authentication. The client's message
         # already starts "2FA verification failed: ...".
         app_ctx.pending_2fa_mode = None
+        app_ctx.pending_client = None
         raise ToolError(
             f"{str(exc).rstrip('.')}. Call start_authentication to send a new code."
         ) from exc
+    pending_client.save_session()
+    app_ctx.client = pending_client
     app_ctx.pending_2fa_mode = None
-    app_ctx.client.save_session()
+    app_ctx.pending_client = None
     return "Authenticated."
 
 

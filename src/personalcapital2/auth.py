@@ -61,11 +61,26 @@ def parse_2fa_mode_env(value: str) -> TwoFactorMode:
     raise EmpowerAuthError(f"Invalid EMPOWER_2FA_MODE={value!r}: must be 'sms'")
 
 
-def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
+_NO_CREDENTIALS = (
+    "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
+)
+
+
+def authenticate(
+    session_path: Path = DEFAULT_SESSION_PATH,
+    *,
+    interactive: bool = True,
+) -> EmpowerClient:
     """Authenticate with Empower, handling 2FA interactively.
 
     Credentials are read from EMPOWER_EMAIL/EMPOWER_PASSWORD env vars,
     falling back to interactive prompts.
+
+    With ``interactive=False`` nothing is ever read from stdin: missing
+    credentials raise ``InteractiveAuthRequired`` at once, and so does a login
+    that needs 2FA, before the SMS is sent. Use it where no one can type a code
+    (the CLI passes it for data commands run without a terminal), so a caller
+    never blocks on a prompt or texts the user a code nobody can enter.
 
     The cache-using portion of login (initial cookies + 2FA challenge dispatch)
     is wrapped in a one-shot retry: if the cached session is stale, it's
@@ -75,24 +90,27 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
 
     Args:
         session_path: Path to persist session cookies.
+        interactive: Allow prompts for missing credentials and the 2FA code.
 
     Returns:
         Authenticated EmpowerClient.
 
     Raises:
         InteractiveAuthRequired: if a credential or 2FA prompt would block on
-            EOFError (non-TTY).
+            EOFError (non-TTY), or would be needed with ``interactive=False``.
         LoginRejectedError: if Empower rejects the username or password and says why.
         EmpowerAuthError: if login fails for credential or server reasons.
     """
+    email = os.getenv("EMPOWER_EMAIL")
+    password = os.getenv("EMPOWER_PASSWORD")
+    if not interactive and not (email and password):
+        raise InteractiveAuthRequired(_NO_CREDENTIALS)
     try:
-        email = os.getenv("EMPOWER_EMAIL") or _prompt("Email: ")
-        password = os.getenv("EMPOWER_PASSWORD") or getpass.getpass("Password: ", stream=sys.stderr)
+        email = email or _prompt("Email: ")
+        password = password or getpass.getpass("Password: ", stream=sys.stderr)
     except EOFError:
         _end_prompt_line()
-        raise InteractiveAuthRequired(
-            "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
-        ) from None
+        raise InteractiveAuthRequired(_NO_CREDENTIALS) from None
 
     # Tracks whether the cache-using login() call actually completed. Errors
     # raised AFTER login succeeds (parse_2fa_mode_env, send_2fa_challenge,
@@ -111,6 +129,14 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
             login_succeeded = True
             log.info("Logged in successfully")
             return client, None
+
+        if not interactive:
+            # Check before sending: an SMS nobody can enter is spam, and each
+            # retry by an agent would send another.
+            raise InteractiveAuthRequired(
+                "Empower requires an SMS verification code, which needs an "
+                "interactive terminal. No code was sent."
+            )
 
         # Read EMPOWER_2FA_MODE inside this branch (not eagerly) so an
         # invalid value lying around in the environment doesn't break flows
@@ -160,11 +186,21 @@ def authenticate(session_path: Path = DEFAULT_SESSION_PATH) -> EmpowerClient:
     return client
 
 
+def _reauthenticate(session_path: Path, problem: str, *, interactive: bool) -> EmpowerClient:
+    """``authenticate()``, with what was wrong with the session leading any
+    ``InteractiveAuthRequired``, so the error alone says why a login was needed."""
+    try:
+        return authenticate(session_path, interactive=interactive)
+    except InteractiveAuthRequired as e:
+        raise InteractiveAuthRequired(f"{problem} {e}") from e
+
+
 def run_authenticated[T](
     operation: Callable[[EmpowerClient], T],
     session_path: Path = DEFAULT_SESSION_PATH,
     *,
     client: EmpowerClient | None = None,
+    interactive: bool = True,
 ) -> T:
     """Run ``operation(client)``; on stale-session failure, re-auth and retry once.
 
@@ -176,19 +212,23 @@ def run_authenticated[T](
 
     Caveat: if ``EMPOWER_EMAIL``/``EMPOWER_PASSWORD`` are unset, the recovery
     path prompts for credentials mid-command. Set the env vars or run
-    ``pc2 login`` first to avoid that.
+    ``pc2 login`` first to avoid that. Pass ``interactive=False`` to never
+    prompt (see ``authenticate()``).
 
     Args:
         operation: Callable taking an EmpowerClient and returning a result.
         session_path: Session file path passed through to ``authenticate()``.
         client: Optional pre-built client; constructed from ``session_path``
             if omitted.
+        interactive: Passed to ``authenticate()``.
 
     Returns:
         Whatever ``operation`` returns.
 
     Raises:
         TwoFactorRequiredError: re-raised without retry (control-flow signal).
+        InteractiveAuthRequired: if a login is needed but can't prompt. The
+            message starts with what was wrong with the session.
         LoginRejectedError: if re-authentication is rejected by Empower (the
             operation is not run again).
         EmpowerAuthError: if re-authentication fails or the retried operation
@@ -201,7 +241,9 @@ def run_authenticated[T](
         # and eliminates a wasted network call on every fresh install.
         if not session_path.exists():
             log.info("No cached session at %s, authenticating", session_path)
-            client = authenticate(session_path)
+            client = _reauthenticate(
+                session_path, f"No saved session at {session_path}.", interactive=interactive
+            )
         else:
             client = EmpowerClient(session_path=session_path)
     try:
@@ -214,7 +256,9 @@ def run_authenticated[T](
         # so "stale" is misleading — there was nothing to go stale.
         if client.has_loaded_session:
             log.warning("Session is stale, re-authenticating: %s", e)
+            problem = "The saved session has expired."
         else:
             log.warning("Cached session unusable, re-authenticating: %s", e)
-        fresh_client = authenticate(session_path)
+            problem = f"The saved session at {session_path} is unusable."
+        fresh_client = _reauthenticate(session_path, problem, interactive=interactive)
         return operation(fresh_client)

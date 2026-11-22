@@ -26,7 +26,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
+
+    from personalcapital2.client import EmpowerClient
 
 import requests
 
@@ -38,6 +40,7 @@ from personalcapital2.exceptions import (
     EmpowerAPIError,
     EmpowerAuthError,
     EmpowerNetworkError,
+    InteractiveAuthRequired,
     LoginRejectedError,
 )
 
@@ -210,15 +213,45 @@ def _error(
 
 # --- Auth commands ---
 
+# The recovery step for every auth error. It names the user, not the agent:
+# an agent that runs `pc2 login` itself, with no one to read the SMS, sends a
+# code nobody can enter.
+LOGIN_SUGGESTION = "Ask the user to run `pc2 login` in a terminal, then retry."
+
+
+def _has_terminal() -> bool:
+    """Whether someone can answer a prompt on stdin.
+
+    Without one, nothing may read stdin for credentials: an agent harness's
+    open pipe would block the read forever.
+    """
+    return sys.stdin.isatty()
+
+
+def _fetch[T](operation: Callable[[EmpowerClient], T], session_path: Path) -> T:
+    """Run a data call, re-authenticating once if the session is stale.
+
+    Without a terminal, re-authentication never prompts and never sends an
+    SMS: it fails at once with InteractiveAuthRequired, whose message says
+    what was wrong with the session.
+    """
+    return run_authenticated(operation, session_path, interactive=_has_terminal())
+
 
 def cmd_login(args: argparse.Namespace) -> None:
     """Authenticate interactively (2FA supported).
 
-    Non-TTY environments raise InteractiveAuthRequired (subclass of
-    EmpowerAuthError) from authenticate() — handled by main() as a
-    structured-JSON error.
+    Without a terminal, the email and password must come from
+    EMPOWER_EMAIL/EMPOWER_PASSWORD; only the 2FA code is read from stdin (the
+    headless pattern: the caller writes it once the SMS arrives). Missing
+    credentials fail before anything is sent, as InteractiveAuthRequired
+    (an EmpowerAuthError), which main() reports as structured JSON.
     """
     session_path = Path(args.session)
+    if not _has_terminal() and not (os.getenv("EMPOWER_EMAIL") and os.getenv("EMPOWER_PASSWORD")):
+        raise InteractiveAuthRequired(
+            "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
+        )
     authenticate(session_path=session_path)
     result = {"session_path": str(session_path), "authenticated": True}
     sys.stdout.write(json.dumps(result) + "\n")
@@ -265,7 +298,7 @@ def cmd_accounts(args: argparse.Namespace) -> None:
     """List linked accounts."""
     session_path = Path(args.session)
     fmt: str = args.format
-    result = run_authenticated(lambda c: c.get_accounts(), session_path)
+    result = _fetch(lambda c: c.get_accounts(), session_path)
     _output(result, result.accounts, fmt)
 
 
@@ -276,7 +309,7 @@ def cmd_transactions(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_transactions(start, end), session_path)
+    result = _fetch(lambda c: c.get_transactions(start, end), session_path)
     _output(result, result.transactions, fmt)
 
 
@@ -287,7 +320,7 @@ def cmd_categories(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_transactions(start, end), session_path)
+    result = _fetch(lambda c: c.get_transactions(start, end), session_path)
     _output(result, result.categories, fmt)
 
 
@@ -295,7 +328,7 @@ def cmd_holdings(args: argparse.Namespace) -> None:
     """Fetch current investment holdings."""
     session_path = Path(args.session)
     fmt: str = args.format
-    result = run_authenticated(lambda c: c.get_holdings(), session_path)
+    result = _fetch(lambda c: c.get_holdings(), session_path)
     _output(result, result.holdings, fmt)
 
 
@@ -306,7 +339,7 @@ def cmd_net_worth(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_net_worth(start, end), session_path)
+    result = _fetch(lambda c: c.get_net_worth(start, end), session_path)
     _output(result, result.entries, fmt)
 
 
@@ -317,7 +350,7 @@ def cmd_balances(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_account_balances(start, end), session_path)
+    result = _fetch(lambda c: c.get_account_balances(start, end), session_path)
     _output(result, result.balances, fmt)
 
 
@@ -329,7 +362,7 @@ def cmd_spending(args: argparse.Namespace) -> None:
     end: date = args.end
     interval: str = args.interval
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_spending(start, end, interval), session_path)
+    result = _fetch(lambda c: c.get_spending(start, end, interval), session_path)
     _output(result, result.intervals, fmt)
 
 
@@ -341,7 +374,7 @@ def cmd_performance(args: argparse.Namespace) -> None:
     end: date = args.end
     account_ids: list[int] = args.account_ids
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_performance(start, end, account_ids), session_path)
+    result = _fetch(lambda c: c.get_performance(start, end, account_ids), session_path)
     _output(result, result.investments, fmt)
 
 
@@ -353,7 +386,7 @@ def cmd_benchmarks(args: argparse.Namespace) -> None:
     end: date = args.end
     account_ids: list[int] = args.account_ids
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_performance(start, end, account_ids), session_path)
+    result = _fetch(lambda c: c.get_performance(start, end, account_ids), session_path)
     _output(result, result.benchmarks, fmt)
 
 
@@ -364,7 +397,7 @@ def cmd_portfolio(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_quotes(start, end), session_path)
+    result = _fetch(lambda c: c.get_quotes(start, end), session_path)
     _output(result, result.portfolio_vs_benchmark, fmt)
 
 
@@ -375,7 +408,7 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
-    result = run_authenticated(lambda c: c.get_quotes(start, end), session_path)
+    result = _fetch(lambda c: c.get_quotes(start, end), session_path)
     # The snapshot is a single summary row, so CSV shows the market quotes table.
     _output(result, result.market_quotes, fmt)
 
@@ -434,7 +467,7 @@ def cmd_raw(args: argparse.Namespace) -> None:
                 )
             key, _, value = pair.partition("=")
             data[key] = value
-    response = run_authenticated(lambda c: c.fetch(endpoint, data), session_path)
+    response = _fetch(lambda c: c.fetch(endpoint, data), session_path)
     sys.stdout.write(json.dumps(response, default=str, indent=2) + "\n")
 
 
@@ -539,7 +572,10 @@ examples:
         epilog="""\
 examples:
   pc2 login                        start interactive 2FA login
-  pc2 login --session ./my.json    save session to custom path""",
+  pc2 login --session ./my.json    save session to custom path
+
+without a terminal, EMPOWER_EMAIL and EMPOWER_PASSWORD must be set, and the
+SMS code is read from stdin: write it, plus a newline, once it arrives.""",
     )
     login_p.set_defaults(func=cmd_login)
 
@@ -562,7 +598,10 @@ examples:
         epilog="""\
 examples:
   pc2 status                       check if session exists and its age
-  pc2 status | jq .exists          machine-readable session check""",
+  pc2 status | jq .exists          machine-readable session check
+
+status reads only the file. "exists": true doesn't mean Empower still accepts
+the session; a data command such as `pc2 accounts` is the real check.""",
     )
     status_p.set_defaults(func=cmd_status)
 
@@ -824,7 +863,7 @@ def main(argv: list[str] | None = None) -> None:
         # again with the same identity fails the same way.
         _error(str(e), "LoginRejectedError", EXIT_AUTH)
     except EmpowerAuthError as e:
-        _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion="pc2 login")
+        _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion=LOGIN_SUGGESTION)
     except EmpowerNetworkError as e:
         _error(
             f"Network error reaching Empower: {e}. Check connection and retry.",

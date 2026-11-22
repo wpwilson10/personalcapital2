@@ -525,17 +525,32 @@ async def test_auth_error_returns_message(server: Any, mock_client: MagicMock) -
 
 
 async def test_handle_tool_errors_auth_branch_directs_to_mcp_tools(
-    server: Any, mock_client: MagicMock
+    server: Any, mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The wrapped auth-error message must direct agents at start_authentication
-    and complete_authentication, NOT 'pc2 login'. Pins the public message
-    contract for every data tool wrapped by _handle_tool_errors.
+    """With credentials set, the wrapped auth-error message must direct agents at
+    start_authentication and complete_authentication, NOT 'pc2 login'. Pins the
+    public message contract for every data tool wrapped by _handle_tool_errors.
     """
+    monkeypatch.setenv("EMPOWER_EMAIL", "user@example.com")
+    monkeypatch.setenv("EMPOWER_PASSWORD", "secret")
     mock_client.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
     text = await _call_tool(server, "get_accounts", mock_client=mock_client, expect_error=True)
     assert "start_authentication" in text
     assert "complete_authentication" in text
     assert "pc2 login" not in text
+
+
+async def test_handle_tool_errors_auth_branch_without_credentials_points_to_terminal(
+    server: Any, mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without credentials, start_authentication can only fail, so the one next
+    step offered is a terminal login by the user."""
+    monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
+    monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
+    mock_client.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
+    text = await _call_tool(server, "get_accounts", mock_client=mock_client, expect_error=True)
+    assert "Ask the user to run `pc2 login` in a terminal, then retry." in text
+    assert "start_authentication" not in text
 
 
 async def test_api_error_returns_message(server: Any, mock_client: MagicMock) -> None:
@@ -632,11 +647,14 @@ async def test_missing_session_file_starts_with_warning(
 
 
 async def test_missing_session_file_data_tool_directs_agent_to_start_authentication(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When the cached session is missing, a data tool call must return an
-    error string mentioning start_authentication (not 'pc2 login') — pins the
-    _handle_tool_errors message contract for the cold-start path."""
+    """When the cached session is missing and credentials are set, a data tool
+    call must return an error string mentioning start_authentication (not
+    'pc2 login') — pins the _handle_tool_errors message contract for the
+    cold-start path."""
+    monkeypatch.setenv("EMPOWER_EMAIL", "user@example.com")
+    monkeypatch.setenv("EMPOWER_PASSWORD", "secret")
     missing = tmp_path / "nonexistent.json"
     srv = create_server(session_path=missing)
 
@@ -1524,6 +1542,7 @@ def test_start_authentication_2fa_required(
 ) -> None:
     monkeypatch.setenv("EMPOWER_2FA_MODE", "sms")
     app_ctx = _make_app_ctx(tmp_path)
+    original_client = app_ctx.client
     _FakeAuthClient.login_recipe = [TwoFactorRequiredError()]
 
     result = start_authentication(_make_ctx(app_ctx))
@@ -1534,6 +1553,9 @@ def test_start_authentication_2fa_required(
     fresh = _FakeAuthClient.instances[0]
     assert fresh.send_2fa_modes == [_TwoFactorMode.SMS]
     assert fresh.save_session_calls == 0  # don't save partial-auth state
+    # The challenge client is kept apart; data tools keep using the original.
+    assert app_ctx.pending_client is fresh
+    assert app_ctx.client is original_client
 
 
 def test_start_authentication_missing_credentials(
@@ -1552,6 +1574,7 @@ def test_start_authentication_missing_credentials(
     assert "EMPOWER_EMAIL" in result
     assert "EMPOWER_PASSWORD" in result
     assert "env" in result.lower()
+    assert "Ask the user to run `pc2 login` in a terminal, then retry." in result
     # No fresh client constructed when credentials are missing.
     assert _FakeAuthClient.instances == []
 
@@ -1611,18 +1634,19 @@ def test_complete_authentication_succeeds(
     """
     fresh_client = _FakeAuthClient(session_path=tmp_path / "session.json")
     _FakeAuthClient.instances = []  # clear so test assertions see only post-setup
-    app_ctx = _AppContext(
-        client=fresh_client,  # type: ignore[arg-type]
-        session_path=tmp_path / "session.json",
-        pending_2fa_mode=_TwoFactorMode.SMS,
-    )
+    app_ctx = _make_app_ctx(tmp_path)
+    app_ctx.pending_2fa_mode = _TwoFactorMode.SMS
+    app_ctx.pending_client = fresh_client  # type: ignore[assignment]  # test double
 
     result = complete_authentication(_make_ctx(app_ctx), code="123456")
 
     assert result == "Authenticated."
     assert app_ctx.pending_2fa_mode is None
+    assert app_ctx.pending_client is None
     assert fresh_client.verify_2fa_calls == 1
     assert fresh_client.save_session_calls == 1
+    # The verified client becomes the data client.
+    assert app_ctx.client is fresh_client
 
 
 @pytest.mark.parametrize(
@@ -1656,6 +1680,7 @@ def test_complete_authentication_failure_messages(
         client=client,  # type: ignore[arg-type]
         session_path=tmp_path / "session.json",
         pending_2fa_mode=_TwoFactorMode.SMS,
+        pending_client=client,  # type: ignore[arg-type]
     )
 
     with pytest.raises(ToolError) as exc_info:
@@ -1667,6 +1692,7 @@ def test_complete_authentication_failure_messages(
     assert ".." not in result
     assert ("Call start_authentication to send a new code." in result) is says_new_code
     assert app_ctx.pending_2fa_mode is None
+    assert app_ctx.pending_client is None
 
 
 def test_complete_authentication_no_pending_challenge(
@@ -1760,34 +1786,30 @@ def test_start_authentication_no_2fa_clears_pending_mode(
     start_authentication(_make_ctx(app_ctx))
 
     assert app_ctx.pending_2fa_mode is None
+    assert app_ctx.pending_client is None
 
 
-def test_get_client_skips_load_session_during_2fa_window(
+def test_get_client_reloads_session_during_2fa_window(
     tmp_path: Path,
     patch_auth_client: None,
 ) -> None:
-    """Pin Bug 1: load_session() replaces (not merges) cookies, which would
-    clobber the in-memory challenge cookies that complete_authentication needs.
-    The gate in _get_client must skip the reload while pending_2fa_mode is set.
-    """
-    fresh_client = _FakeAuthClient(session_path=tmp_path / "session.json")
+    """An abandoned 2FA challenge must not stop data tools from picking up a
+    session saved by `pc2 login` in a terminal. The data client reloads from
+    disk on every call; the challenge client's in-memory cookies (which
+    load_session() would replace, not merge) are never touched."""
+    data_client = _FakeAuthClient(session_path=tmp_path / "session.json")
+    challenge_client = _FakeAuthClient(session_path=tmp_path / "session.json")
     _FakeAuthClient.instances = []
     app_ctx = _AppContext(
-        client=fresh_client,  # type: ignore[arg-type]
+        client=data_client,  # type: ignore[arg-type]
         session_path=tmp_path / "session.json",
         pending_2fa_mode=_TwoFactorMode.SMS,
-    )
-    ctx = _make_ctx(app_ctx)
-
-    _get_client(ctx)
-    assert fresh_client.load_session_calls == 0, (
-        "load_session must NOT be called while pending_2fa_mode is set"
+        pending_client=challenge_client,  # type: ignore[arg-type]
     )
 
-    # Clear the gate; subsequent calls reload as before.
-    app_ctx.pending_2fa_mode = None
-    _get_client(ctx)
-    assert fresh_client.load_session_calls == 1
+    assert _get_client(_make_ctx(app_ctx)) is data_client
+    assert data_client.load_session_calls == 1
+    assert challenge_client.load_session_calls == 0
 
 
 async def test_server_info_reports_package_version(server: Any) -> None:

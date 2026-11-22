@@ -110,7 +110,13 @@ result = run_authenticated(
 
 The operation **must be idempotent** — it can run twice on the recovery path. All `EmpowerClient.get_*` methods are read-only and safe to retry.
 
-If `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` aren't set, recovery prompts for credentials interactively. Set them to avoid mid-command prompts in scripts. In non-TTY environments, recovery raises `InteractiveAuthRequired` instead of hanging.
+If `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` aren't set, recovery prompts for credentials interactively. Set them to avoid mid-command prompts in scripts.
+
+Where no one can answer a prompt, pass `interactive=False` (to `run_authenticated` or `authenticate`). Nothing is then read from stdin: missing credentials, or a login that needs an SMS code, raise `InteractiveAuthRequired` at once, before any code is sent. From `run_authenticated`, the message starts with what was wrong with the session (`No saved session at ...`, `The saved session has expired.`). With the credentials set and a device Empower remembers, recovery still succeeds. The default, `interactive=True`, prompts on stdin, which is what terminals and notebooks want; the `pc2` CLI passes `interactive=False` for data commands run without a terminal.
+
+```python
+result = run_authenticated(lambda c: c.get_accounts(), interactive=False)
+```
 
 ## Headless library use
 
@@ -139,7 +145,7 @@ All exceptions are exported from the package root.
 | Exception | Raised when |
 |---|---|
 | `EmpowerAuthError` | Login failed (bad credentials, CSRF extraction failure), session is stale, or 2FA prompt couldn't complete. |
-| `InteractiveAuthRequired` | Subclass of `EmpowerAuthError`. Authentication needs an interactive terminal but none is available (no TTY, env vars unset). Lets callers distinguish "no TTY" from "bad credentials" without parsing strings. |
+| `InteractiveAuthRequired` | Subclass of `EmpowerAuthError`. Authentication needs an interactive terminal but none is available (no TTY, env vars unset), or would need a prompt with `interactive=False`. Lets callers distinguish "no TTY" from "bad credentials" without parsing strings. |
 | `LoginRejectedError` | Subclass of `EmpowerAuthError`. Empower rejected the sign-in (the username, or a wrong password) and said why. Raised only when Empower returns at least one error (a session error such as 201 is treated as a stale session instead). The message leads with Empower's codes and messages; `errors` holds the `spHeader.errors` entries as sent, `codes` their codes as strings, and `login_url` / `destination_url` any redirect Empower gave. The cached session is kept and the login is not retried. Codes `113`/`207` are what accounts that sign in with a username (not an email address) get; those aren't supported yet ([#9](https://github.com/wpwilson10/personalcapital2/issues/9)). |
 | `TwoFactorRequiredError` | Subclass of `EmpowerAuthError`. The server requires 2FA before password auth can proceed. Used as a control-flow signal during the login flow; `run_authenticated` re-raises it without retry. |
 | `EmpowerAPIError` | The HTTP request reached Empower and got a structured rejection (`spHeader.success = false`) or returned non-JSON. |

@@ -10,6 +10,7 @@ pc2 login
 
 # Session management
 pc2 status          # {"session_path": "...", "exists": true, "age_seconds": 3600, "age_human": "1h"}
+                    # reads only the file: "exists" doesn't mean Empower still accepts it
 pc2 logout          # {"session_path": "...", "deleted": true}
 
 # Fetch data (--start defaults to 30d, --end defaults to today)
@@ -68,7 +69,7 @@ So `pc2 categories --start 365d` prints a year of transactions too; use `jq '.ca
 | Variable | Purpose |
 |---|---|
 | `EMPOWER_EMAIL` | Empower account email (skips the email prompt) |
-| `EMPOWER_PASSWORD` | Empower account password (skips the password prompt). Setting both `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` lets stale-session recovery run without prompting mid-command. |
+| `EMPOWER_PASSWORD` | Empower account password (skips the password prompt). Setting both `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` lets stale-session recovery run without prompting mid-command, unless Empower asks for a new SMS code. |
 | `EMPOWER_2FA_MODE` | `sms` (case-insensitive) — the only method Empower still offers. Optional: 2FA defaults to SMS when unset. Empower removed email 2FA, so a stale `email` value raises a clear `EmpowerAuthError` pointing to SMS; any other value also raises `EmpowerAuthError`. Read lazily — only consulted when the server actually requires 2FA, so a leftover value doesn't break flows where the device is remembered. |
 | `PC2_SESSION_PATH` | Override the default session file path (default: `~/.config/personalcapital2/session.json`). Per-command override: `--session PATH`. |
 | `PC2_MCP_MAX_CHARS` | MCP-server-only. Soft cap on tool response size in characters (default: 50,000 ≈ 12,500 tokens). Date-based lists keep the newest whole days, other lists their first rows, and `truncated` reports what was cut plus `next_end_date` for paging back. The newest day is always returned whole, even if it alone exceeds the cap. |
@@ -77,14 +78,22 @@ So `pc2 categories --start 365d` prints a year of transactions too; use `jq '.ca
 
 If the cached session is rejected by Empower mid-command, `pc2` re-authenticates and retries the request once. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` to avoid a mid-command credential prompt during recovery.
 
-For fully headless invocation when 2FA may be required, pipe the verification code on stdin:
+Data commands read stdin only when it's a terminal. Without one, a command that needs a new login (no session, an expired one, or an SMS code to enter) fails at once with exit 1, before any SMS is sent. It never blocks on a pipe and never texts a code no one can enter. With the credentials set and a device Empower remembers, recovery still runs without a terminal.
 
-```bash
-EMPOWER_EMAIL=... EMPOWER_PASSWORD=... \
-    printf '%s\n' "$CODE" | pc2 login
+### Headless login
+
+Without a terminal, `pc2 login` takes the email and password from `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` (it fails at once if either is missing) and reads only the SMS code from stdin. The code exists only after `pc2 login` has asked Empower to send it, so the orchestrator starts `pc2 login` with stdin as a pipe, waits for the SMS, then writes the code and a newline:
+
+```python
+import subprocess
+
+# EMPOWER_EMAIL and EMPOWER_PASSWORD are set in the environment.
+login = subprocess.Popen(["pc2", "login"], stdin=subprocess.PIPE, text=True)
+code = wait_for_sms_code()  # your SMS pickup
+login.communicate(code + "\n")
 ```
 
-The orchestrator owns SMS code pickup — pc2 reads the code from stdin. 2FA defaults to SMS, so there's no method prompt to block on in a non-TTY environment; only the verification-code prompt needs the piped code (otherwise it raises `InteractiveAuthRequired`).
+If stdin closes before a code arrives, `pc2 login` fails with `EmpowerAuthError`. An agent with no way to read the SMS shouldn't run `pc2 login` itself: it should ask the user to run it in a terminal.
 
 ## Exit codes
 
@@ -103,8 +112,10 @@ The orchestrator owns SMS code pickup — pc2 reads the code from stdin. 2FA def
 All errors are JSON on the last line of stderr with a consistent schema. For example, a data command with no session, no terminal and no `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` prints:
 
 ```json
-{"error": "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars.", "type": "EmpowerAuthError", "suggestion": "pc2 login"}
+{"error": "No saved session at /home/you/.config/personalcapital2/session.json. Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars.", "type": "EmpowerAuthError", "suggestion": "Ask the user to run `pc2 login` in a terminal, then retry."}
 ```
+
+When a data command needs a login it can't do, `error` starts with what was wrong with the session: `No saved session at ...`, `The saved session has expired.` or `The saved session at ... is unusable.` Then it says why it couldn't sign in, for example `Empower requires an SMS verification code, which needs an interactive terminal. No code was sent.` Every `EmpowerAuthError` suggests the user run `pc2 login` in a terminal.
 
 Earlier stderr lines can hold log warnings or a login prompt, so parse the last line.
 

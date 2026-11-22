@@ -332,7 +332,7 @@ def test_run_authenticated_recovers_from_stale_fetch(
     auth_calls = {"n": 0}
     real_authenticate = authenticate
 
-    def counting_authenticate(path: Path = session_path) -> Any:
+    def counting_authenticate(path: Path = session_path, *, interactive: bool = True) -> Any:
         auth_calls["n"] += 1
         return real_authenticate(path)
 
@@ -426,7 +426,7 @@ def test_run_authenticated_does_not_recover_from_2fa_required(
 
     auth_calls = {"n": 0}
 
-    def fake_authenticate(path: Path = session_path) -> Any:
+    def fake_authenticate(path: Path = session_path, *, interactive: bool = True) -> Any:
         auth_calls["n"] += 1
         raise AssertionError("authenticate must NOT be called for TwoFactorRequiredError")
 
@@ -459,7 +459,7 @@ def test_run_authenticated_does_not_retry_twice(
     auth_calls = {"n": 0}
     real_authenticate = authenticate
 
-    def counting_authenticate(path: Path = session_path) -> Any:
+    def counting_authenticate(path: Path = session_path, *, interactive: bool = True) -> Any:
         auth_calls["n"] += 1
         return real_authenticate(path)
 
@@ -532,7 +532,7 @@ def test_run_authenticated_cold_start_short_circuits(
     auth_calls = {"n": 0}
     real_authenticate = authenticate
 
-    def counting_authenticate(path: Path = session_path) -> Any:
+    def counting_authenticate(path: Path = session_path, *, interactive: bool = True) -> Any:
         auth_calls["n"] += 1
         return real_authenticate(path)
 
@@ -563,7 +563,7 @@ def test_run_authenticated_cached_session_skips_short_circuit(
 
     auth_calls = {"n": 0}
 
-    def fake_authenticate(path: Path = session_path) -> Any:
+    def fake_authenticate(path: Path = session_path, *, interactive: bool = True) -> Any:
         auth_calls["n"] += 1
         raise AssertionError("authenticate must NOT be called when a session exists")
 
@@ -829,3 +829,90 @@ def test_authenticate_2fa_mode_env_ignored_when_no_2fa_required(
     client = _FakeClient.instances[0]
     assert client.send_2fa_calls == 0
     assert client.verify_2fa_calls == 0
+
+
+# --- Non-interactive mode: never read stdin, never send an SMS nobody can enter ---
+
+
+def test_authenticate_non_interactive_missing_credentials_fails_before_prompting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
+    monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
+
+    def fail_input(_prompt: str = "") -> str:
+        raise AssertionError("must not read stdin")
+
+    _patch_input(monkeypatch, fail_input)
+    monkeypatch.setattr("getpass.getpass", fail_input)
+
+    with pytest.raises(InteractiveAuthRequired, match="interactive terminal"):
+        authenticate(tmp_path / "session.json", interactive=False)
+
+    assert _FakeClient.instances == []
+
+
+def test_authenticate_non_interactive_2fa_fails_before_sending_sms(
+    tmp_path: Path,
+    env_creds: None,
+) -> None:
+    session_path = tmp_path / "session.json"
+    session_path.write_text("{}")
+    _FakeClient.login_recipe = [TwoFactorRequiredError()]
+
+    with pytest.raises(InteractiveAuthRequired, match="No code was sent"):
+        authenticate(session_path, interactive=False)
+
+    assert [c.send_2fa_calls for c in _FakeClient.instances] == [0]
+    assert session_path.exists()
+
+
+def test_authenticate_non_interactive_remembered_device_succeeds(
+    tmp_path: Path,
+    env_creds: None,
+) -> None:
+    """No 2FA asked for: non-interactive login still self-heals."""
+    session_path = tmp_path / "session.json"
+    _FakeClient.login_recipe = [None]
+
+    client = authenticate(session_path, interactive=False)
+
+    assert client.save_session_calls == 1  # type: ignore[attr-defined]  # test double
+
+
+def test_run_authenticated_non_interactive_says_session_expired(
+    tmp_path: Path,
+    env_creds: None,
+) -> None:
+    """The error leads with what was wrong with the session, so an agent reading
+    only the message knows a login is needed and why."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text("{}")
+    stale = _FakeClient(session_path=session_path)
+    stale._loaded_from_disk = True
+    _FakeClient.instances = []
+    _FakeClient.login_recipe = [TwoFactorRequiredError()]
+
+    def operation(client: Any) -> str:
+        raise EmpowerAuthError("Session not authenticated")
+
+    with pytest.raises(InteractiveAuthRequired) as exc_info:
+        run_authenticated(operation, session_path, client=stale, interactive=False)  # type: ignore[arg-type]  # test double
+
+    assert str(exc_info.value).startswith("The saved session has expired. Empower requires")
+    assert all(c.send_2fa_calls == 0 for c in _FakeClient.instances)
+
+
+def test_run_authenticated_non_interactive_says_no_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
+    monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
+    session_path = tmp_path / "session.json"
+
+    with pytest.raises(InteractiveAuthRequired) as exc_info:
+        run_authenticated(lambda c: c, session_path, interactive=False)
+
+    assert str(exc_info.value).startswith(f"No saved session at {session_path}. Login requires")
