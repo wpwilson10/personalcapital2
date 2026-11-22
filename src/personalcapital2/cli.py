@@ -16,6 +16,7 @@ import csv
 import dataclasses
 import io
 import json
+import os
 import re
 import sys
 from datetime import date, timedelta
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 import requests
 
 from personalcapital2._serialization import json_default as _json_default
+from personalcapital2._serialization import serialize_result
 from personalcapital2.auth import authenticate, run_authenticated
 from personalcapital2.client import DEFAULT_SESSION_PATH
 from personalcapital2.exceptions import (
@@ -48,6 +50,7 @@ EXIT_USAGE = 2  # argparse default
 EXIT_API = 3
 EXIT_UNEXPECTED = 4
 EXIT_NETWORK = 5
+EXIT_BROKEN_PIPE = 141  # 128 + SIGPIPE: the reader closed stdout early
 
 
 class AgentArgumentParser(argparse.ArgumentParser):
@@ -66,7 +69,7 @@ class AgentArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         err: dict[str, str] = {"error": message, "type": "UsageError"}
         if "account-ids" in message:
-            err["suggestion"] = "List account IDs with: pc2 accounts"
+            err["suggestion"] = "List account IDs with: pc2 holdings"
         sys.stderr.write(json.dumps(err) + "\n")
         sys.exit(EXIT_USAGE)
 
@@ -88,7 +91,22 @@ def _month_offset(months_back: int) -> tuple[int, int]:
 
 
 def _parse_date(s: str) -> date:
-    """Parse a date string: YYYY-MM-DD, 'today', Nd, mb[-N], me[-N]."""
+    """Parse a date string: YYYY-MM-DD, 'today', Nd, mb[-N], me[-N], yb[-N], ye[-N].
+
+    Any malformed or out-of-range value (e.g. ``1000000d``, ``yb-5000``) raises
+    ``ArgumentTypeError``, which argparse reports as a UsageError (exit 2).
+    """
+    try:
+        return _parse_date_unchecked(s)
+    except (OverflowError, ValueError):
+        raise argparse.ArgumentTypeError(
+            f"invalid date '{s}': use YYYY-MM-DD, 'today', Nd, mb[-N], me[-N], yb[-N], "
+            "or ye[-N], within years 1-9999"
+        ) from None
+
+
+def _parse_date_unchecked(s: str) -> date:
+    """Parse a date string; raises ValueError or OverflowError on bad input."""
     if s == "today":
         return date.today()
 
@@ -119,12 +137,7 @@ def _parse_date(s: str) -> date:
         years_back = int(m.group(1)) if m.group(1) else 0
         return date(date.today().year - years_back, 12, 31)
 
-    try:
-        return date.fromisoformat(s)
-    except ValueError:
-        raise argparse.ArgumentTypeError(
-            f"invalid date '{s}': use YYYY-MM-DD, 'today', Nd, mb[-N], me[-N], yb[-N], or ye[-N]"
-        ) from None
+    return date.fromisoformat(s)
 
 
 def _parse_account_ids(s: str) -> list[int]:
@@ -151,12 +164,6 @@ def _validate_dates(start: date, end: date) -> None:
         )
 
 
-def _serialize_json(items: Sequence[object]) -> str:
-    """Serialize a sequence of dataclass instances to JSON."""
-    rows = [dataclasses.asdict(item) for item in items]  # pyright: ignore[reportArgumentType] — items are dataclass instances
-    return json.dumps(rows, default=_json_default, indent=2)
-
-
 def _serialize_csv(items: Sequence[object]) -> str:
     """Serialize a sequence of dataclass instances to CSV."""
     if not items:
@@ -174,13 +181,16 @@ def _serialize_csv(items: Sequence[object]) -> str:
     return buf.getvalue()
 
 
-def _output(items: Sequence[object], fmt: str) -> None:
-    """Write serialized items to stdout."""
-    text = _serialize_csv(items) if fmt == "csv" else _serialize_json(items)
-    if text:
-        sys.stdout.write(text)
-        if fmt != "csv" and not text.endswith("\n"):
-            sys.stdout.write("\n")
+def _output(result: object, rows: Sequence[object], fmt: str) -> None:
+    """Write a command's output to stdout.
+
+    JSON is the full result container the API call returned (the same shape the
+    Python API and MCP tools return). CSV is the command's own table, ``rows``.
+    """
+    if fmt == "csv":
+        sys.stdout.write(_serialize_csv(rows))
+    else:
+        sys.stdout.write(serialize_result(result) + "\n")
 
 
 def _error(
@@ -256,7 +266,7 @@ def cmd_accounts(args: argparse.Namespace) -> None:
     session_path = Path(args.session)
     fmt: str = args.format
     result = run_authenticated(lambda c: c.get_accounts(), session_path)
-    _output(result.accounts, fmt)
+    _output(result, result.accounts, fmt)
 
 
 def cmd_transactions(args: argparse.Namespace) -> None:
@@ -267,7 +277,7 @@ def cmd_transactions(args: argparse.Namespace) -> None:
     end: date = args.end
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_transactions(start, end), session_path)
-    _output(result.transactions, fmt)
+    _output(result, result.transactions, fmt)
 
 
 def cmd_categories(args: argparse.Namespace) -> None:
@@ -278,7 +288,7 @@ def cmd_categories(args: argparse.Namespace) -> None:
     end: date = args.end
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_transactions(start, end), session_path)
-    _output(result.categories, fmt)
+    _output(result, result.categories, fmt)
 
 
 def cmd_holdings(args: argparse.Namespace) -> None:
@@ -286,7 +296,7 @@ def cmd_holdings(args: argparse.Namespace) -> None:
     session_path = Path(args.session)
     fmt: str = args.format
     result = run_authenticated(lambda c: c.get_holdings(), session_path)
-    _output(result.holdings, fmt)
+    _output(result, result.holdings, fmt)
 
 
 def cmd_net_worth(args: argparse.Namespace) -> None:
@@ -297,7 +307,7 @@ def cmd_net_worth(args: argparse.Namespace) -> None:
     end: date = args.end
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_net_worth(start, end), session_path)
-    _output(result.entries, fmt)
+    _output(result, result.entries, fmt)
 
 
 def cmd_balances(args: argparse.Namespace) -> None:
@@ -308,7 +318,7 @@ def cmd_balances(args: argparse.Namespace) -> None:
     end: date = args.end
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_account_balances(start, end), session_path)
-    _output(result.balances, fmt)
+    _output(result, result.balances, fmt)
 
 
 def cmd_spending(args: argparse.Namespace) -> None:
@@ -320,7 +330,7 @@ def cmd_spending(args: argparse.Namespace) -> None:
     interval: str = args.interval
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_spending(start, end, interval), session_path)
-    _output(result.intervals, fmt)
+    _output(result, result.intervals, fmt)
 
 
 def cmd_performance(args: argparse.Namespace) -> None:
@@ -332,7 +342,7 @@ def cmd_performance(args: argparse.Namespace) -> None:
     account_ids: list[int] = args.account_ids
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_performance(start, end, account_ids), session_path)
-    _output(result.investments, fmt)
+    _output(result, result.investments, fmt)
 
 
 def cmd_benchmarks(args: argparse.Namespace) -> None:
@@ -344,7 +354,7 @@ def cmd_benchmarks(args: argparse.Namespace) -> None:
     account_ids: list[int] = args.account_ids
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_performance(start, end, account_ids), session_path)
-    _output(result.benchmarks, fmt)
+    _output(result, result.benchmarks, fmt)
 
 
 def cmd_portfolio(args: argparse.Namespace) -> None:
@@ -355,27 +365,19 @@ def cmd_portfolio(args: argparse.Namespace) -> None:
     end: date = args.end
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_quotes(start, end), session_path)
-    _output(result.portfolio_vs_benchmark, fmt)
+    _output(result, result.portfolio_vs_benchmark, fmt)
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
-    """Output portfolio snapshot and market quotes."""
+    """Output portfolio snapshot and market quotes (JSON: the full quotes result)."""
     session_path = Path(args.session)
     fmt: str = args.format
     start: date = args.start
     end: date = args.end
     _validate_dates(start, end)
     result = run_authenticated(lambda c: c.get_quotes(start, end), session_path)
-    if fmt == "csv":
-        # CSV outputs the market quotes table (snapshot is a single summary row,
-        # not useful as a standalone CSV — use JSON for the combined view)
-        _output(result.market_quotes, fmt)
-    else:
-        output = {
-            "snapshot": dataclasses.asdict(result.snapshot),
-            "market_quotes": [dataclasses.asdict(q) for q in result.market_quotes],
-        }
-        sys.stdout.write(json.dumps(output, default=_json_default, indent=2) + "\n")
+    # The snapshot is a single summary row, so CSV shows the market quotes table.
+    _output(result, result.market_quotes, fmt)
 
 
 _MCP_MIN_VERSION = (2, 1)
@@ -495,6 +497,11 @@ exit codes:
   3  API error (request failed, rate limited)
   4  unexpected error
   5  network error (transport-level failure reaching Empower)
+  141  stdout closed early by the reader (e.g. piped into head)
+
+output:
+  JSON (default) is the API call's full result, e.g. {"accounts": [...], "summary": {...}}.
+  CSV is the command's table. Errors are JSON on the last line of stderr.
 
 examples:
   pc2 accounts                              list all linked accounts
@@ -655,10 +662,10 @@ examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 output varies by format:
-  --format json (default)  combined object with "snapshot" and "market_quotes" keys
+  --format json (default)  the full quotes result: "portfolio_vs_benchmark",
+                           "snapshot" and "market_quotes" (same JSON as portfolio)
   --format csv             market quotes table only (snapshot is a single summary
-                           row, not useful as standalone CSV — use JSON for the
-                           combined view)
+                           row, not useful as standalone CSV)
 
 examples:
   pc2 snapshot --start mb --end today
@@ -736,13 +743,13 @@ examples:
     mcp_p = sub.add_parser(
         "mcp",
         parents=[_common],
-        help="start MCP tool server (requires: pip install personalcapital2[mcp])",
+        help="start MCP tool server (requires: pip install 'personalcapital2[mcp]')",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 starts an MCP tool server over stdio. Requires the [mcp] extra.
 
 install:
-  pip install personalcapital2[mcp]
+  uv tool install 'personalcapital2[mcp]'   # or: pip install 'personalcapital2[mcp]'
 
 client config (Claude Code / Claude Desktop):
   {
@@ -751,10 +758,17 @@ client config (Claude Code / Claude Desktop):
         "type": "stdio",
         "command": "pc2",
         "args": ["mcp"],
-        "env": {"PC2_SESSION_PATH": "~/.config/personalcapital2/session.json"}
+        "env": {
+          "PC2_SESSION_PATH": "~/.config/personalcapital2/session.json",
+          "EMPOWER_EMAIL": "you@example.com",
+          "EMPOWER_PASSWORD": "..."
+        }
       }
     }
-  }""",
+  }
+
+EMPOWER_EMAIL and EMPOWER_PASSWORD let the agent re-authenticate in chat
+(start_authentication / complete_authentication) when the session expires.""",
     )
     mcp_p.set_defaults(func=cmd_mcp)
 
@@ -794,6 +808,9 @@ def main(argv: list[str] | None = None) -> None:
         try:
             func = args.func
             func(args)
+            # Flush here so a closed pipe surfaces as BrokenPipeError below,
+            # not as an "Exception ignored" message at interpreter exit.
+            sys.stdout.flush()
         except BaseExceptionGroup as eg:
             # Re-raise the singleton inner exception so the typed-handler chain
             # below dispatches on the real cause (e.g. EmpowerAuthError from a
@@ -826,6 +843,13 @@ def main(argv: list[str] | None = None) -> None:
         _error(msg, "EmpowerAPIError", EXIT_API)
     except KeyboardInterrupt:
         sys.exit(130)
+    except BrokenPipeError:
+        # The reader closed stdout early (e.g. `pc2 transactions | head`). Point
+        # stdout at devnull so the exit-time flush can't fail again, and exit
+        # quietly: there is no one left to read an error.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(EXIT_BROKEN_PIPE)
     except SystemExit:
         raise
     except Exception as e:

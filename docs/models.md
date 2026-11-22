@@ -199,6 +199,8 @@ Returned via `AccountBalancesResult.balances` from `client.get_account_balances(
 
 ### BenchmarkPerformance
 
+`benchmark` is one of Empower's blended indexes (`^PC_US_STOCKS`, `^PC_US_BONDS`, `^PC_INTL_STOCKS`, `^PC_INTL_BONDS`, `^PC_ALTERNATIVES`, `^PC_BLENDED`), not the S&P 500.
+
 | Field | Type |
 |---|---|
 | `date` | `date` |
@@ -206,6 +208,8 @@ Returned via `AccountBalancesResult.balances` from `client.get_account_balances(
 | `performance` | `Decimal` |
 
 ### PortfolioVsBenchmark
+
+`portfolio_value` and `sp500_value` are the API's `YOU` and `^INX` series: cumulative percent change since the first day of the range (a baseline row of 0 on the trading day before `start_date`), not dollar values.
 
 | Field | Type |
 |---|---|

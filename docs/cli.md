@@ -37,6 +37,32 @@ pc2 raw /newaccount/getAccounts2
 pc2 mcp
 ```
 
+## Output
+
+With `--format json` (the default), every data command prints the full result of its API call: the same container the Python API and MCP tools return, summaries included.
+
+```bash
+pc2 accounts      # {"accounts": [...], "summary": {"networth": ..., ...}}
+pc2 holdings      # {"holdings": [...], "total_value": ...}
+pc2 performance --account-ids 100,200
+                  # {"investments": [...], "benchmarks": [...], "account_summaries": [...]}
+```
+
+Commands that share an API call print the same JSON and differ only in their CSV table:
+
+| Command | JSON keys | CSV table |
+|---|---|---|
+| `accounts` | `accounts`, `summary` | accounts |
+| `transactions`, `categories` | `transactions`, `categories`, `summary` | transactions / categories |
+| `holdings` | `holdings`, `total_value` | holdings |
+| `net-worth` | `entries`, `summary` | entries |
+| `balances` | `balances`, `summary` | balances |
+| `spending` | `intervals` | intervals |
+| `performance`, `benchmarks` | `investments`, `benchmarks`, `account_summaries` | investments / benchmarks |
+| `portfolio`, `snapshot` | `portfolio_vs_benchmark`, `snapshot`, `market_quotes` | portfolio_vs_benchmark / market_quotes |
+
+So `pc2 categories --start 365d` prints a year of transactions too; use `jq '.categories'` for just the list. `raw`, `status`, `login` and `logout` print their own objects.
+
 ## Environment variables
 
 | Variable | Purpose |
@@ -45,7 +71,7 @@ pc2 mcp
 | `EMPOWER_PASSWORD` | Empower account password (skips the password prompt). Setting both `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` lets stale-session recovery run without prompting mid-command. |
 | `EMPOWER_2FA_MODE` | `sms` (case-insensitive) — the only method Empower still offers. Optional: 2FA defaults to SMS when unset. Empower removed email 2FA, so a stale `email` value raises a clear `EmpowerAuthError` pointing to SMS; any other value also raises `EmpowerAuthError`. Read lazily — only consulted when the server actually requires 2FA, so a leftover value doesn't break flows where the device is remembered. |
 | `PC2_SESSION_PATH` | Override the default session file path (default: `~/.config/personalcapital2/session.json`). Per-command override: `--session PATH`. |
-| `PC2_MCP_MAX_CHARS` | MCP-server-only. Soft cap on tool response size in characters (default: 50,000 ≈ 12,500 tokens). Lists are truncated with `truncated` metadata before exceeding the cap. |
+| `PC2_MCP_MAX_CHARS` | MCP-server-only. Soft cap on tool response size in characters (default: 50,000 ≈ 12,500 tokens). Date-based lists keep the newest whole days, other lists their first rows, and `truncated` reports what was cut plus `next_end_date` for paging back. The newest day is always returned whole, even if it alone exceeds the cap. |
 
 ## Stale-session recovery
 
@@ -70,16 +96,19 @@ The orchestrator owns SMS code pickup — pc2 reads the code from stdin. 2FA def
 | 3 | API error (request failed, rate limited, HTTP 4xx/5xx from Empower) |
 | 4 | Unexpected error |
 | 5 | Network error (transport-level failure reaching Empower) |
+| 141 | stdout closed early by the reader (e.g. `pc2 transactions \| head`); nothing is written to stderr |
 
 ## Structured errors
 
-All errors are JSON to stderr with a consistent schema:
+All errors are JSON on the last line of stderr with a consistent schema. For example, a data command with no session, no terminal and no `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` prints:
 
 ```json
-{"error": "No session found. Run: pc2 login", "type": "EmpowerAuthError", "suggestion": "pc2 login"}
+{"error": "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars.", "type": "EmpowerAuthError", "suggestion": "pc2 login"}
 ```
 
-The `suggestion` field appears when a concrete recovery action is available (auth errors, invalid account IDs).
+Earlier stderr lines can hold log warnings or a login prompt, so parse the last line.
+
+The `suggestion` field appears when a concrete recovery action is available (auth errors, a malformed `--account-ids`). Account IDs Empower doesn't recognize aren't an error: `performance` and `benchmarks` return empty `investments` and `account_summaries` (benchmarks still come back). Find investment account IDs with `pc2 holdings`.
 
 `"type": "LoginRejectedError"` (exit 1) means Empower rejected the sign-in (the username or the password): `error` starts with Empower's own codes and messages, and there is no `suggestion`, because logging in again with the same credentials fails the same way. Accounts that sign in with a username rather than an email address get code 113 or 207 and aren't supported yet.
 

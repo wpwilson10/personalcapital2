@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,8 @@ import requests
 
 mcp_sdk = pytest.importorskip("mcp", reason="mcp extra not installed")
 
+from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
+
 from personalcapital2.exceptions import (  # noqa: E402
     EmpowerAPIError,
     EmpowerAuthError,
@@ -24,9 +27,8 @@ from personalcapital2.exceptions import (  # noqa: E402
     TwoFactorRequiredError,
 )
 from personalcapital2.mcp_server import (  # noqa: E402
-    _apply_limit,
-    _enforce_char_cap,
-    _validate_date_range,
+    _check_date_range,
+    _render,
     create_server,
 )
 from personalcapital2.models import (  # noqa: E402
@@ -347,8 +349,12 @@ async def _call_tool(
     arguments: dict[str, Any] | None = None,
     *,
     mock_client: MagicMock | None = None,
+    expect_error: bool = False,
 ) -> str:
     """Call a tool via in-memory MCP transport and return the text content.
+
+    Asserts ``isError`` matches ``expect_error``: tool failures must reach the
+    client as ``isError: true``, never as a successful result.
 
     ``mode="legacy"`` runs the in-memory JSON-RPC streams and initialize
     handshake, matching what a stdio client exercises. The default ``"auto"``
@@ -364,7 +370,7 @@ async def _call_tool(
     with ctx:
         async with Client(server, mode="legacy") as client:
             result = await client.call_tool(name, arguments or {})
-    assert not result.is_error, f"Tool {name} returned error: {result.content}"
+    assert result.is_error is expect_error, f"{name}: is_error={result.is_error} {result.content}"
     assert len(result.content) > 0
     text_block = result.content[0]
     assert text_block.type == "text"
@@ -511,11 +517,11 @@ async def test_get_spending_with_interval(server: Any, mock_client: MagicMock) -
 
 
 async def test_auth_error_returns_message(server: Any, mock_client: MagicMock) -> None:
-    """Auth errors should return a helpful message, not a traceback."""
+    """Auth errors fail the call (isError) with a helpful message, not a traceback."""
     mock_client.get_accounts.side_effect = EmpowerAuthError("Session expired")
-    text = await _call_tool(server, "get_accounts", mock_client=mock_client)
-    assert "Error:" in text
-    assert "Session expired" in text
+    text = await _call_tool(server, "get_accounts", mock_client=mock_client, expect_error=True)
+    assert text.startswith("Error executing tool get_accounts: Session expired")
+    assert "Error: " not in text  # no doubled prefix on top of the SDK's
 
 
 async def test_handle_tool_errors_auth_branch_directs_to_mcp_tools(
@@ -526,30 +532,29 @@ async def test_handle_tool_errors_auth_branch_directs_to_mcp_tools(
     contract for every data tool wrapped by _handle_tool_errors.
     """
     mock_client.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
-    text = await _call_tool(server, "get_accounts", mock_client=mock_client)
+    text = await _call_tool(server, "get_accounts", mock_client=mock_client, expect_error=True)
     assert "start_authentication" in text
     assert "complete_authentication" in text
     assert "pc2 login" not in text
 
 
 async def test_api_error_returns_message(server: Any, mock_client: MagicMock) -> None:
-    """API errors should return the error message."""
+    """API errors fail the call with the error message."""
     mock_client.get_transactions.side_effect = EmpowerAPIError("Rate limited")
     text = await _call_tool(
         server,
         "get_transactions",
         {"start_date": "2026-03-01", "end_date": "2026-03-31"},
         mock_client=mock_client,
+        expect_error=True,
     )
-    assert "Error:" in text
     assert "Rate limited" in text
 
 
 async def test_network_error_returns_message(server: Any, mock_client: MagicMock) -> None:
     """Defensive: an un-wrapped requests.RequestException still produces a readable message."""
     mock_client.get_holdings.side_effect = requests.ConnectionError("DNS resolution failed")
-    text = await _call_tool(server, "get_holdings", mock_client=mock_client)
-    assert "Error:" in text
+    text = await _call_tool(server, "get_holdings", mock_client=mock_client, expect_error=True)
     assert "Network request failed" in text
 
 
@@ -559,38 +564,34 @@ async def test_empower_network_error_returns_message(server: Any, mock_client: M
     mock_client.get_holdings.side_effect = EmpowerNetworkError(
         "Request to https://pc-api.empower-retirement.com failed: connection refused"
     )
-    text = await _call_tool(server, "get_holdings", mock_client=mock_client)
-    assert "Error:" in text
+    text = await _call_tool(server, "get_holdings", mock_client=mock_client, expect_error=True)
     assert "Network request to Empower failed" in text
     assert "Check connection and retry" in text
 
 
 async def test_value_error_returns_message(server: Any, mock_client: MagicMock) -> None:
     """Response-shape drift (ValueError from the validators) must reach the
-    model with its detail. Since mcp 2.1 an escaping exception arrives only as
-    'Error executing tool <name>'."""
+    model with its detail, not just 'Error executing tool <name>'."""
     mock_client.get_accounts.side_effect = ValueError("missing field 'accounts'")
-    text = await _call_tool(server, "get_accounts", mock_client=mock_client)
-    assert text.startswith("Error: unexpected API response")
+    text = await _call_tool(server, "get_accounts", mock_client=mock_client, expect_error=True)
+    assert text.startswith("Error executing tool get_accounts: Unexpected API response")
     assert "missing field 'accounts'" in text
 
 
 # --- Date validation tests ---
 
 
-def test_validate_date_range_valid() -> None:
-    assert _validate_date_range(date(2026, 1, 1), date(2026, 3, 31)) is None
+def test_check_date_range_valid() -> None:
+    _check_date_range(date(2026, 1, 1), date(2026, 3, 31))
 
 
-def test_validate_date_range_same_day() -> None:
-    assert _validate_date_range(date(2026, 3, 15), date(2026, 3, 15)) is None
+def test_check_date_range_same_day() -> None:
+    _check_date_range(date(2026, 3, 15), date(2026, 3, 15))
 
 
-def test_validate_date_range_reversed() -> None:
-    result = _validate_date_range(date(2026, 3, 31), date(2026, 1, 1))
-    assert result is not None
-    assert "start_date" in result
-    assert "end_date" in result
+def test_check_date_range_reversed() -> None:
+    with pytest.raises(ToolError, match=r"start_date .* is after end_date"):
+        _check_date_range(date(2026, 3, 31), date(2026, 1, 1))
 
 
 async def test_reversed_dates_return_error(server: Any, mock_client: MagicMock) -> None:
@@ -600,8 +601,8 @@ async def test_reversed_dates_return_error(server: Any, mock_client: MagicMock) 
         "get_transactions",
         {"start_date": "2026-04-01", "end_date": "2026-03-01"},
         mock_client=mock_client,
+        expect_error=True,
     )
-    assert "Error:" in text
     assert "start_date" in text
     mock_client.get_transactions.assert_not_called()
 
@@ -651,6 +652,7 @@ async def test_missing_session_file_data_tool_directs_agent_to_start_authenticat
         async with Client(srv, mode="legacy") as client:
             result = await client.call_tool("get_accounts", {})
 
+    assert result.is_error
     assert len(result.content) > 0
     text = result.content[0].text  # type: ignore[union-attr]  # text content has .text
     assert "start_authentication" in text
@@ -702,6 +704,16 @@ async def test_all_tools_registered(server: Any) -> None:
 
 
 # --- Transaction limit tests ---
+#
+# Fixtures put one row per day, ending on _END, oldest first (the order the
+# live API returned on 2026-11-21). Truncation keeps the newest whole days.
+
+_END = date(2027, 12, 31)
+
+
+def _day(i: int, n: int) -> date:
+    """Date of row i of n, oldest first, with the last row on _END."""
+    return _END - timedelta(days=n - 1 - i)
 
 
 def _make_many_transactions(n: int) -> TransactionsResult:
@@ -710,7 +722,7 @@ def _make_many_transactions(n: int) -> TransactionsResult:
         Transaction(
             user_transaction_id=i,
             user_account_id=1,
-            date=date(2026, 3, 15),
+            date=_day(i, n),
             amount=Decimal("10.00"),
             is_cash_in=False,
             is_income=False,
@@ -814,124 +826,224 @@ async def test_transactions_summary_always_present(server: Any, mock_client: Mag
     assert len(data["categories"]) == 1
 
 
-# --- Character cap tests ---
+# --- _render truncation tests ---
 
 
-def test_apply_limit_under_limit() -> None:
-    """_apply_limit should pass through when under limit."""
-    data = json.dumps({"items": [1, 2, 3], "summary": "ok"})
-    result = _apply_limit(data, "items", 10)
-    assert result == data  # Unchanged
+@dataclasses.dataclass(frozen=True)
+class _Row:
+    date: date
+    n: int
 
 
-def test_apply_limit_over_limit() -> None:
-    """_apply_limit should truncate and add metadata."""
-    data = json.dumps({"items": list(range(20)), "summary": "ok"})
-    result = _apply_limit(data, "items", 5)
-    parsed = json.loads(result)
-    assert len(parsed["items"]) == 5
-    assert parsed["truncated"]["items"]["showing"] == 5
-    assert parsed["truncated"]["items"]["total"] == 20
-    assert parsed["summary"] == "ok"  # Other fields untouched
+@dataclasses.dataclass(frozen=True)
+class _Result:
+    rows: tuple[_Row, ...]
+    other: tuple[_Row, ...] = ()
+    summary: str = "ok"
 
 
-def test_enforce_char_cap_under_limit() -> None:
-    """_enforce_char_cap should pass through small outputs."""
-    small = json.dumps({"entries": [1, 2, 3]})
-    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "10000"}):
-        result = _enforce_char_cap(small)
-    assert result == small
+def _daily(days: int, per_day: int = 1, *, newest_first: bool = False) -> tuple[_Row, ...]:
+    """``per_day`` rows on each of ``days`` days ending on _END."""
+    rows = [
+        _Row(date=_END - timedelta(days=d), n=d * per_day + k)
+        for d in range(days)
+        for k in range(per_day)
+    ]
+    return tuple(rows if newest_first else reversed(rows))
 
 
-def test_enforce_char_cap_over_limit() -> None:
-    """_enforce_char_cap should truncate the largest list and add metadata."""
-    # Create output that exceeds 500 chars
-    big_list = [{"value": f"item-{i:04d}", "data": "x" * 50} for i in range(100)]
-    data = json.dumps({"entries": big_list, "summary": {"total": 100}}, indent=2)
-    assert len(data) > 500  # Sanity check
-
-    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "500"}):
-        result = _enforce_char_cap(data)
-
-    assert len(result) <= 500
-    parsed = json.loads(result)
-    assert parsed["truncated"]["entries"]["total"] == 100
-    assert parsed["truncated"]["entries"]["showing"] < 100
-    assert "hint" in parsed["truncated"]
-    assert parsed["summary"] == {"total": 100}  # Summary untouched
+def _dates(data: dict[str, Any], field: str) -> list[str]:
+    return [row["date"] for row in data[field]]
 
 
-def test_enforce_char_cap_env_var_override() -> None:
-    """PC2_MCP_MAX_CHARS env var should override the default."""
-    big_list = list(range(200))
-    data = json.dumps({"items": big_list}, indent=2)
-
-    # With a very small cap, it should truncate
-    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "100"}):
-        result = _enforce_char_cap(data)
-    parsed = json.loads(result)
-    assert "truncated" in parsed
-
-    # With a large cap, it should pass through
-    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
-        result = _enforce_char_cap(data)
-    assert json.loads(result) == {"items": big_list}
+def test_render_compact_without_truncation() -> None:
+    """Small output passes through as compact JSON with no truncated field."""
+    text = _render(_Result(rows=_daily(3)), dated=("rows",), limit=10)
+    data = json.loads(text)
+    assert "truncated" not in data
+    assert len(data["rows"]) == 3
+    assert "\n" not in text
+    assert ": " not in text
 
 
-def test_enforce_char_cap_preserves_prior_total() -> None:
-    """When _apply_limit truncates first, _enforce_char_cap must keep the original total."""
-    # Simulate _apply_limit already truncated 500 -> 100, setting truncated metadata
-    items = [{"value": f"item-{i:04d}", "data": "x" * 50} for i in range(100)]
-    data = json.dumps(
-        {
-            "entries": items,
-            "summary": "ok",
-            "truncated": {"entries": {"showing": 100, "total": 500}},
-        },
-        indent=2,
+@pytest.mark.parametrize("newest_first", [False, True], ids=["oldest-first", "newest-first"])
+def test_render_keeps_newest_days(newest_first: bool) -> None:
+    """Truncation keeps the newest days whatever order the API used, in that order."""
+    text = _render(_Result(rows=_daily(10, newest_first=newest_first)), dated=("rows",), limit=3)
+    data = json.loads(text)
+    kept = _dates(data, "rows")
+    newest = [(_END - timedelta(days=d)).isoformat() for d in range(3)]
+    assert sorted(kept) == sorted(newest)
+    assert kept == (newest if newest_first else newest[::-1])
+    assert data["truncated"]["rows"] == {"showing": 3, "total": 10}
+    assert data["truncated"]["next_end_date"] == (_END - timedelta(days=3)).isoformat()
+    assert "end_date=" in data["truncated"]["hint"]
+    assert data["summary"] == "ok"
+
+
+def test_render_never_splits_a_day() -> None:
+    """A limit that falls mid-day keeps fewer rows rather than split the day."""
+    data = json.loads(_render(_Result(rows=_daily(3, per_day=4)), dated=("rows",), limit=6))
+    assert len(data["rows"]) == 4
+    assert set(_dates(data, "rows")) == {_END.isoformat()}
+
+
+def test_render_newest_day_is_whole_even_over_limit() -> None:
+    """When one day has more rows than limit, that whole day still comes back."""
+    data = json.loads(_render(_Result(rows=_daily(3, per_day=5)), dated=("rows",), limit=2))
+    assert len(data["rows"]) == 5
+    assert data["truncated"]["rows"] == {"showing": 5, "total": 15}
+
+
+def test_render_one_cutoff_for_all_dated_lists() -> None:
+    """Dated lists in one response share a cutoff, so one end_date pages them all."""
+    rows = _daily(10)
+    other = tuple(r for r in rows if r.date <= _END - timedelta(days=2))  # ends 2 days earlier
+    data = json.loads(_render(_Result(rows=rows, other=other), dated=("rows", "other"), limit=3))
+    cutoff = min(_dates(data, "rows"))
+    assert len(data["rows"]) == 3
+    assert all(d >= cutoff for d in _dates(data, "other"))
+    assert data["truncated"]["next_end_date"] < cutoff
+
+
+def test_render_baseline_row_omits_next_end_date() -> None:
+    """If the only omitted rows predate start_date (Empower's baseline row),
+    there is no earlier page to point at."""
+    start = _END - timedelta(days=4)
+    rows = _daily(6)  # oldest row is start - 1 day: the baseline
+    data = json.loads(_render(_Result(rows=rows), dated=("rows",), limit=5, start_date=start))
+    assert len(data["rows"]) == 5
+    assert "next_end_date" not in data["truncated"]
+    assert "before start_date" in data["truncated"]["hint"]
+
+
+def test_render_baseline_before_weekend_start_omits_next_end_date() -> None:
+    """start_date on a Sunday: the baseline is the Friday before and the first
+    kept day is Monday. Only the baseline was cut, so there's no next page."""
+    start = date(2026, 11, 1)  # Sunday
+    friday = _Row(date=date(2026, 10, 30), n=0)
+    week = tuple(_Row(date=date(2026, 11, 2) + timedelta(days=d), n=d + 1) for d in range(5))
+    data = json.loads(
+        _render(_Result(rows=(friday, *week)), dated=("rows",), limit=5, start_date=start)
     )
+    assert len(data["rows"]) == 5
+    assert "next_end_date" not in data["truncated"]
+    assert "before start_date" in data["truncated"]["hint"]
 
+
+def test_render_dated_and_undated_together() -> None:
+    """get_quotes shape. The date cut runs first, sized against the undated list
+    at full length; when the undated list alone exceeds the cap, the dated list
+    keeps its newest day and the undated list is cut too, with both hints."""
+    result = _Result(rows=_daily(60), other=_daily(200))
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "3000"}):
+        text = _render(result, dated=("rows",), undated=("other",))
+    data = json.loads(text)
+    assert len(text) <= 3000
+    assert max(_dates(data, "rows")) == _END.isoformat()
+    assert data["truncated"]["rows"]["total"] == 60
+    assert data["truncated"]["other"]["total"] == 200
+    hint = data["truncated"]["hint"]
+    assert "Showing the newest days" in hint
+    assert "(response size cap reached)" in hint
+
+
+def test_render_char_cap_keeps_newest_days() -> None:
+    """Over the character cap, the newest days are kept and the output fits."""
     with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "2000"}):
-        result = _enforce_char_cap(data)
-
-    parsed = json.loads(result)
-    assert parsed["truncated"]["entries"]["total"] == 500  # Original total preserved
-    assert parsed["truncated"]["entries"]["showing"] < 100
-
-
-def test_enforce_char_cap_no_list_fields() -> None:
-    """_enforce_char_cap should not crash when there are no list fields to truncate."""
-    # Create a large string-only payload
-    data = json.dumps({"text": "x" * 1000, "number": 42})
-    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "100"}):
-        result = _enforce_char_cap(data)
-    # Can't truncate — returns original
-    assert result == data
+        text = _render(_Result(rows=_daily(200)), dated=("rows",))
+    data = json.loads(text)
+    assert len(text) <= 2000
+    assert 0 < len(data["rows"]) < 200
+    assert max(_dates(data, "rows")) == _END.isoformat()
 
 
-def test_enforce_char_cap_multi_list() -> None:
-    """_enforce_char_cap should truncate multiple list fields to fit within the cap."""
-    # Simulate PerformanceResult-like data with 3 large list fields
-    list_a = [{"id": i, "data": "a" * 30} for i in range(50)]
-    list_b = [{"id": i, "data": "b" * 30} for i in range(40)]
-    list_c = [{"id": i, "data": "c" * 30} for i in range(30)]
-    data = json.dumps(
-        {"investments": list_a, "benchmarks": list_b, "summaries": list_c},
-        indent=2,
+def test_render_char_cap_is_soft_for_the_newest_day() -> None:
+    """A cap too small for even one day still returns that whole day."""
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "50"}):
+        data = json.loads(_render(_Result(rows=_daily(5, per_day=3)), dated=("rows",)))
+    assert len(data["rows"]) == 3
+
+
+def test_render_undated_lists_keep_first_rows() -> None:
+    """Undated lists keep their first rows, with a hint that says so."""
+    data = json.loads(_render(_Result(rows=_daily(10)), undated=("rows",), limit=4))
+    assert [r["n"] for r in data["rows"]] == [r.n for r in _daily(10)[:4]]
+    assert data["truncated"]["rows"] == {"showing": 4, "total": 10}
+    assert data["truncated"]["hint"] == "Showing the first 4 of 10 rows; pass a larger limit."
+    assert "next_end_date" not in data["truncated"]
+
+
+def test_render_unlisted_fields_are_never_cut() -> None:
+    """Fields not named dated/undated (summaries, categories) stay complete."""
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "1000"}):
+        data = json.loads(_render(_Result(rows=_daily(100), other=_daily(50)), dated=("rows",)))
+    assert len(data["other"]) == 50
+    assert "other" not in data["truncated"]
+
+
+def test_render_env_var_override() -> None:
+    """PC2_MCP_MAX_CHARS sets the cap."""
+    result = _Result(rows=_daily(200))
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "1000"}):
+        assert "truncated" in json.loads(_render(result, dated=("rows",)))
+    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
+        assert "truncated" not in json.loads(_render(result, dated=("rows",)))
+
+
+async def test_balances_truncation_keeps_every_account(server: Any, mock_client: MagicMock) -> None:
+    """Balances arrive account by account; the cut keeps whole days, so every
+    account shows up for each day kept (not just the first accounts)."""
+    days = 10
+    balances = tuple(
+        AccountBalance(date=_day(i, days), user_account_id=acct, balance=Decimal("1"))
+        for acct in (1, 2, 3)
+        for i in range(days)
     )
-    # Cap is small enough that truncating only the largest list isn't sufficient
-    cap = len(data) // 4
-    assert cap < len(data)
+    mock_client.get_account_balances.return_value = AccountBalancesResult(
+        balances=balances,
+        summary=AccountBalancesSummary(
+            account_count=3, latest_date=_END, latest_total=Decimal("3")
+        ),
+    )
+    text = await _call_tool(
+        server,
+        "get_account_balances",
+        {"start_date": "2027-01-01", "end_date": "2027-12-31", "limit": 6},
+        mock_client=mock_client,
+    )
+    data = json.loads(text)
+    assert len(data["balances"]) == 6
+    assert {b["user_account_id"] for b in data["balances"]} == {1, 2, 3}
+    assert len({b["date"] for b in data["balances"]}) == 2
 
-    with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": str(cap)}):
-        result = _enforce_char_cap(data)
 
-    assert len(result) <= cap
-    parsed = json.loads(result)
-    assert "truncated" in parsed
-    # At least two fields should have been truncated
-    truncated_fields = [k for k in parsed["truncated"] if k != "hint"]
-    assert len(truncated_fields) >= 2
+async def test_transactions_paging_reconciles(server: Any, mock_client: MagicMock) -> None:
+    """Following next_end_date page by page returns every transaction exactly once."""
+    everything = _make_many_transactions(300)
+
+    def by_range(start: date, end: date) -> TransactionsResult:
+        txns = tuple(t for t in everything.transactions if start <= t.date <= end)
+        return dataclasses.replace(everything, transactions=txns)
+
+    mock_client.get_transactions.side_effect = by_range
+    start = everything.transactions[0].date.isoformat()
+    end = _END.isoformat()
+    seen: list[int] = []
+    for _ in range(20):
+        data = json.loads(
+            await _call_tool(
+                server,
+                "get_transactions",
+                {"start_date": start, "end_date": end, "limit": 70},
+                mock_client=mock_client,
+            )
+        )
+        seen.extend(t["user_transaction_id"] for t in data["transactions"])
+        if "truncated" not in data:
+            break
+        end = data["truncated"]["next_end_date"]
+    assert sorted(seen) == [t.user_transaction_id for t in everything.transactions]
 
 
 # --- Net worth limit tests ---
@@ -941,7 +1053,7 @@ def _make_many_net_worth_entries(n: int) -> NetWorthResult:
     """Create a NetWorthResult with n entries."""
     entries = tuple(
         NetWorthEntry(
-            date=date(2026, 1, 1),
+            date=_day(i, n),
             networth=Decimal("50000"),
             total_assets=Decimal("60000"),
             total_liabilities=Decimal("10000"),
@@ -953,7 +1065,7 @@ def _make_many_net_worth_entries(n: int) -> NetWorthResult:
             total_other_assets=Decimal("0"),
             total_other_liabilities=Decimal("0"),
         )
-        for _ in range(n)
+        for i in range(n)
     )
     return NetWorthResult(
         entries=entries,
@@ -1031,8 +1143,8 @@ async def test_net_worth_no_truncation(server: Any, mock_client: MagicMock) -> N
 def _make_many_balances(n: int) -> AccountBalancesResult:
     """Create an AccountBalancesResult with n balance entries."""
     balances = tuple(
-        AccountBalance(date=date(2026, 4, 1), user_account_id=1, balance=Decimal("5000.50"))
-        for _ in range(n)
+        AccountBalance(date=_day(i, n), user_account_id=1, balance=Decimal("5000.50"))
+        for i in range(n)
     )
     return AccountBalancesResult(
         balances=balances,
@@ -1158,7 +1270,7 @@ def _make_many_performance(n_inv: int, n_bench: int) -> PerformanceResult:
     """Create a PerformanceResult with n_inv investment rows and n_bench benchmark rows."""
     investments = tuple(
         InvestmentPerformance(
-            date=date(2026, 4, 1),
+            date=_day(i, n_inv),
             user_account_id=i % 3,
             performance=Decimal("0.05"),
         )
@@ -1166,7 +1278,7 @@ def _make_many_performance(n_inv: int, n_bench: int) -> PerformanceResult:
     )
     benchmarks = tuple(
         BenchmarkPerformance(
-            date=date(2026, 4, 1),
+            date=_day(i, n_bench),
             benchmark=f"^BENCH{i % 6}",
             performance=Decimal("0.04"),
         )
@@ -1249,42 +1361,28 @@ async def test_performance_no_truncation(server: Any, mock_client: MagicMock) ->
 # --- Negative / zero limit tests ---
 
 
-def test_apply_limit_negative() -> None:
-    """_apply_limit should be a no-op for negative limits."""
-    data = json.dumps({"items": [1, 2, 3, 4, 5], "summary": "ok"})
-    result = _apply_limit(data, "items", -1)
-    assert result == data  # Unchanged
-
-
-def test_apply_limit_zero() -> None:
-    """_apply_limit should be a no-op for limit=0."""
-    data = json.dumps({"items": [1, 2, 3, 4, 5], "summary": "ok"})
-    result = _apply_limit(data, "items", 0)
-    assert result == data  # Unchanged
-
-
 async def test_transactions_negative_limit(server: Any, mock_client: MagicMock) -> None:
-    """Negative limit should return an error without calling the API."""
+    """Negative limit fails the call without calling the API."""
     text = await _call_tool(
         server,
         "get_transactions",
         {"start_date": "2026-03-01", "end_date": "2026-03-31", "limit": -1},
         mock_client=mock_client,
+        expect_error=True,
     )
-    assert "Error:" in text
     assert "limit must be at least 1" in text
     mock_client.get_transactions.assert_not_called()
 
 
 async def test_holdings_zero_limit(server: Any, mock_client: MagicMock) -> None:
-    """Zero limit should return an error without calling the API."""
+    """Zero limit fails the call without calling the API."""
     text = await _call_tool(
         server,
         "get_holdings",
         {"limit": 0},
         mock_client=mock_client,
+        expect_error=True,
     )
-    assert "Error:" in text
     assert "limit must be at least 1" in text
     mock_client.get_holdings.assert_not_called()
 
@@ -1447,8 +1545,10 @@ def test_start_authentication_missing_credentials(
     monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
     app_ctx = _make_app_ctx(tmp_path)
 
-    result = start_authentication(_make_ctx(app_ctx))
+    with pytest.raises(ToolError) as exc_info:
+        start_authentication(_make_ctx(app_ctx))
 
+    result = str(exc_info.value)
     assert "EMPOWER_EMAIL" in result
     assert "EMPOWER_PASSWORD" in result
     assert "env" in result.lower()
@@ -1489,9 +1589,10 @@ def test_start_authentication_2fa_mode_email_tombstone(
     app_ctx = _make_app_ctx(tmp_path)
     _FakeAuthClient.login_recipe = [TwoFactorRequiredError()]
 
-    result = start_authentication(_make_ctx(app_ctx))
+    with pytest.raises(ToolError) as exc_info:
+        start_authentication(_make_ctx(app_ctx))
 
-    assert "Error" in result
+    result = str(exc_info.value)
     assert "email" in result.lower()
     assert "sms" in result.lower()
     assert app_ctx.pending_2fa_mode is None
@@ -1529,12 +1630,12 @@ def test_complete_authentication_succeeds(
     [
         (
             EmpowerAuthError("2FA verification failed: Incorrect verification code entered."),
-            "Error: 2FA verification failed: Incorrect verification code entered. Call",
+            "2FA verification failed: Incorrect verification code entered. Call",
             True,
         ),
         (
             LoginRejectedError("Empower rejected the sign-in (Incorrect password entered.)."),
-            "Error: Empower rejected the sign-in (Incorrect password entered.).",
+            "Empower rejected the sign-in (Incorrect password entered.).",
             False,
         ),
     ],
@@ -1557,8 +1658,10 @@ def test_complete_authentication_failure_messages(
         pending_2fa_mode=_TwoFactorMode.SMS,
     )
 
-    result = complete_authentication(_make_ctx(app_ctx), code="0000")
+    with pytest.raises(ToolError) as exc_info:
+        complete_authentication(_make_ctx(app_ctx), code="0000")
 
+    result = str(exc_info.value)
     assert result.startswith(expected_start)
     assert result.count("2FA verification failed") <= 1
     assert ".." not in result
@@ -1574,9 +1677,11 @@ def test_complete_authentication_no_pending_challenge(
     app_ctx = _make_app_ctx(tmp_path)
     assert app_ctx.pending_2fa_mode is None  # precondition
 
-    result = complete_authentication(_make_ctx(app_ctx), code="123456")
+    with pytest.raises(ToolError) as exc_info:
+        complete_authentication(_make_ctx(app_ctx), code="123456")
 
-    assert "no pending 2FA challenge" in result
+    result = str(exc_info.value)
+    assert "No pending 2FA challenge" in result
     assert "start_authentication" in result
     # No verify call happened.
     assert app_ctx.client.verify_2fa_calls == 0  # type: ignore[attr-defined]
@@ -1612,9 +1717,9 @@ def test_start_authentication_keeps_old_client_on_failure(
     original_client = app_ctx.client
     _FakeAuthClient.login_recipe = [EmpowerAuthError("Bad credentials")]
 
-    result = start_authentication(_make_ctx(app_ctx))
+    with pytest.raises(ToolError, match="Authentication failed"):
+        start_authentication(_make_ctx(app_ctx))
 
-    assert "authentication failed" in result
     assert app_ctx.client is original_client
     assert app_ctx.pending_2fa_mode is None
 
@@ -1631,10 +1736,12 @@ def test_start_authentication_login_rejected(
         LoginRejectedError("Empower rejected the sign-in (113: Please use a valid email address.).")
     ]
 
-    result = start_authentication(_make_ctx(app_ctx))
+    with pytest.raises(ToolError) as exc_info:
+        start_authentication(_make_ctx(app_ctx))
 
-    assert result.startswith("Error: Empower rejected the sign-in (113:")
-    assert "authentication failed" not in result
+    result = str(exc_info.value)
+    assert result.startswith("Empower rejected the sign-in (113:")
+    assert "Authentication failed" not in result
     assert app_ctx.client is original_client
 
 
