@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from decimal import Decimal
 from typing import Any
+from urllib.parse import parse_qs
 
 import pytest
 import responses
@@ -395,6 +397,44 @@ def test_get_account_balances_happy_path() -> None:
     assert result.summary.account_count == 1
     assert result.summary.latest_date == date(2026, 3, 15)
     assert result.summary.latest_total == Decimal("5432.1")
+
+
+@responses.activate
+def test_get_account_balances_requests_every_account_type() -> None:
+    # Empower returns only investment accounts for types=["balances"] alone.
+    responses.post(_api_url("/account/getHistories"), json=_success_response({"histories": []}))
+    client = _make_client()
+    client.get_account_balances(date(2026, 1, 1), date(2026, 1, 31))
+
+    params = parse_qs(str(responses.calls[0].request.body))
+    assert json.loads(params["types"][0]) == ["balances", "networth"]
+
+
+@responses.activate
+def test_get_account_balances_summary_sums_assets_and_amounts_owed() -> None:
+    # latest_total is the plain sum (Empower's aggregateBalance): amounts owed
+    # count as positive and a credit balance is negative, so it isn't net worth.
+    responses.post(
+        _api_url("/account/getHistories"),
+        json=_success_response(
+            {
+                "histories": [
+                    {"date": "2026-03-14", "balances": {"1": 900.0, "2": 50.0}},
+                    {
+                        "date": "2026-03-15",
+                        "aggregateBalance": 1240.0,
+                        "balances": {"1": 1000.0, "2": 300.0, "3": -60.0},
+                    },
+                ]
+            }
+        ),
+    )
+    client = _make_client()
+    summary = client.get_account_balances(date(2026, 3, 1), date(2026, 3, 31)).summary
+
+    assert summary.account_count == 3
+    assert summary.latest_date == date(2026, 3, 15)
+    assert summary.latest_total == Decimal("1240")
 
 
 @responses.activate

@@ -10,7 +10,7 @@ Each method makes a single HTTP request and returns a response container with ty
 | `get_transactions(start, end)` | `TransactionsResult` | Transactions + categories + cashflow summary |
 | `get_holdings()` | `HoldingsResult` | Investment holdings + total value |
 | `get_net_worth(start, end)` | `NetWorthResult` | Daily net worth + change summary |
-| `get_account_balances(start, end)` | `AccountBalancesResult` | Daily account balances |
+| `get_account_balances(start, end)` | `AccountBalancesResult` | Daily balances for every account |
 | `get_performance(start, end, account_ids)` | `PerformanceResult` | Investment + benchmark performance + per-account summaries |
 | `get_quotes(start, end)` | `QuotesResult` | Portfolio vs benchmark + snapshot + market quotes |
 | `get_spending(start, end, interval)` | `SpendingResult` | Current spending (all intervals, see note below) |

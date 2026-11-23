@@ -1189,8 +1189,8 @@ def _make_many_balances(n: int) -> AccountBalancesResult:
 
 
 async def test_account_balances_default_limit(server: Any, mock_client: MagicMock) -> None:
-    """Default limit=500 should truncate when there are more entries."""
-    mock_client.get_account_balances.return_value = _make_many_balances(600)
+    """Default limit=1000 should truncate when there are more entries."""
+    mock_client.get_account_balances.return_value = _make_many_balances(1100)
     with patch.dict("os.environ", {"PC2_MCP_MAX_CHARS": "999999"}):
         text = await _call_tool(
             server,
@@ -1199,9 +1199,9 @@ async def test_account_balances_default_limit(server: Any, mock_client: MagicMoc
             mock_client=mock_client,
         )
     data = json.loads(text)
-    assert len(data["balances"]) == 500
-    assert data["truncated"]["balances"]["showing"] == 500
-    assert data["truncated"]["balances"]["total"] == 600
+    assert len(data["balances"]) == 1000
+    assert data["truncated"]["balances"]["showing"] == 1000
+    assert data["truncated"]["balances"]["total"] == 1100
 
 
 async def test_account_balances_custom_limit(server: Any, mock_client: MagicMock) -> None:
