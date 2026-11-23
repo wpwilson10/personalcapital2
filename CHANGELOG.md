@@ -43,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them from piped stdin was never documented and no longer works.
 - **Data commands without a terminal no longer read credentials from stdin
   either.** Set `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` instead.
+- **`--account-ids` is optional** for `pc2 performance` and `pc2 benchmarks`,
+  and `account_ids` is optional for the MCP `get_performance` tool. Leaving it
+  out returns every investment account, as an empty list already did.
+- **`pc2 login`, `logout` and `status` print `session_path` as an absolute
+  path**, matching the auth errors.
 - **MCP auth errors give one next step that can work.** With credentials set,
   they point to `start_authentication` as before. Without them, they ask the
   user to run `pc2 login` in a terminal. The `start_authentication`
@@ -58,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- MCP tool descriptions no longer say every expired session leads to
+  `start_authentication`; without credentials, the next step is asking the
+  user to run `pc2 login`. The `limit` descriptions say the response size cap
+  often stops a list first, so agents page back instead of raising `limit`.
 - The headless login example works: it started `pc2 login` with the
   credentials applied to `printf` instead, and piped a code that couldn't exist
   yet.

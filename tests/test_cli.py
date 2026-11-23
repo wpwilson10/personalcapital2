@@ -347,10 +347,10 @@ def test_parser_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert "pc2" in captured.out
 
 
-def test_parser_performance_requires_account_ids() -> None:
+def test_parser_performance_account_ids_default_to_all() -> None:
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["performance", "--start", "today", "--end", "today"])
+    args = parser.parse_args(["performance", "--start", "today", "--end", "today"])
+    assert args.account_ids == []
 
 
 def test_parser_format_default_json() -> None:

@@ -467,6 +467,18 @@ async def test_get_performance(server: Any, mock_client: MagicMock) -> None:
     assert "account_summaries" in data
 
 
+async def test_get_performance_account_ids_default_to_all(
+    server: Any, mock_client: MagicMock
+) -> None:
+    await _call_tool(
+        server,
+        "get_performance",
+        {"start_date": "2026-03-01", "end_date": "2026-04-01"},
+        mock_client=mock_client,
+    )
+    mock_client.get_performance.assert_called_once_with(date(2026, 3, 1), date(2026, 4, 1), [])
+
+
 async def test_get_quotes(server: Any, mock_client: MagicMock) -> None:
     text = await _call_tool(
         server,

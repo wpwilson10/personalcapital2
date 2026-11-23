@@ -24,6 +24,7 @@ pc2 categories --start mb
 pc2 portfolio --start 365d
 pc2 snapshot --start 365d
 pc2 spending --start 90d --interval MONTH
+pc2 performance --start 365d                  # every investment account
 pc2 performance --start 365d --account-ids 100,200
 pc2 benchmarks --start 365d --account-ids 100,200
 

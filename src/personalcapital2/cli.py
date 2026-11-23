@@ -152,7 +152,9 @@ def _parse_account_ids(s: str) -> list[int]:
     """Parse comma-separated account IDs: '100,200,300'."""
     parts = [p.strip() for p in s.split(",") if p.strip()]
     if not parts:
-        raise argparse.ArgumentTypeError("account-ids must not be empty")
+        raise argparse.ArgumentTypeError(
+            "account-ids must not be empty; omit --account-ids for every investment account"
+        )
     try:
         return [int(p) for p in parts]
     except ValueError:
@@ -251,7 +253,7 @@ def cmd_login(args: argparse.Namespace) -> None:
     if not _has_terminal() and not (os.getenv("EMPOWER_EMAIL") and os.getenv("EMPOWER_PASSWORD")):
         raise InteractiveAuthRequired(NO_CREDENTIALS_MESSAGE)
     authenticate(session_path=session_path)
-    result = {"session_path": str(session_path), "authenticated": True}
+    result = {"session_path": str(session_path.expanduser().absolute()), "authenticated": True}
     sys.stdout.write(json.dumps(result) + "\n")
 
 
@@ -262,7 +264,7 @@ def cmd_logout(args: argparse.Namespace) -> None:
     if session_path.exists():
         session_path.unlink()
         deleted = True
-    result = {"session_path": str(session_path), "deleted": deleted}
+    result = {"session_path": str(session_path.expanduser().absolute()), "deleted": deleted}
     sys.stdout.write(json.dumps(result) + "\n")
 
 
@@ -272,7 +274,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     session_path = Path(args.session)
     result: dict[str, str | bool | int] = {
-        "session_path": str(session_path),
+        "session_path": str(session_path.expanduser().absolute()),
         "exists": session_path.exists(),
     }
     if session_path.exists():
@@ -489,12 +491,12 @@ def _add_date_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_account_ids_arg(parser: argparse.ArgumentParser) -> None:
-    """Add required --account-ids argument."""
+    """Add the optional --account-ids argument (default: every investment account)."""
     parser.add_argument(
         "--account-ids",
         type=_parse_account_ids,
-        required=True,
-        help="comma-separated account IDs (e.g. 100,200,300)",
+        default=[],
+        help="comma-separated account IDs (e.g. 100,200,300; default: every investment account)",
     )
 
 

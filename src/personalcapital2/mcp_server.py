@@ -539,9 +539,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         with net worth, total assets, and total liabilities.
         No parameters required.
 
-        Errors: the call fails (isError) if the session is expired, with a
-        message saying to call start_authentication, then
-        complete_authentication with the verification code if 2FA is required.
+        Errors: the call fails (isError) if the session is expired, with the
+        next step: call start_authentication, or, when the server has no
+        credentials, ask the user to run `pc2 login`.
         """
         client = _get_client(ctx)
         return _render(client.get_accounts(), undated=("accounts",))
@@ -564,12 +564,14 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
                 When there are more, the newest whole days are kept and
                 ``truncated.next_end_date`` says where to page back from. The
                 newest day is always returned in full, even if it alone
-                exceeds limit.
+                exceeds limit. The response size cap often stops it first,
+                so page back rather than raising limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
-        limit < 1. If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        limit < 1.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         _check_limit(limit)
@@ -590,9 +592,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
                 first holdings are kept. Total value is always complete.
 
         Errors: the call fails (isError) if limit < 1.
-        If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_limit(limit)
         client = _get_client(ctx)
@@ -614,12 +616,15 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             end_date: End of date range (ISO format: YYYY-MM-DD).
             limit: Maximum number of daily entries to return (default 180).
                 When there are more, the newest days are kept and
-                ``truncated.next_end_date`` says where to page back from.
+                ``truncated.next_end_date`` says where to page back from. The
+                response size cap can stop it first, so page back rather than
+                raising limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
-        limit < 1. If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        limit < 1.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         _check_limit(limit)
@@ -645,12 +650,15 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
                 When there are more, the newest whole days are kept (every
                 account for each day shown) and ``truncated.next_end_date``
                 says where to page back from. The newest day is always
-                returned in full, even if it alone exceeds limit.
+                returned in full, even if it alone exceeds limit. The response
+                size cap often stops it first, so page back rather than
+                raising limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
-        limit < 1. If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        limit < 1.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         _check_limit(limit)
@@ -664,15 +672,15 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         ctx: Context[_AppContext],
         start_date: date,
         end_date: date,
-        account_ids: list[int],
+        account_ids: list[int] | None = None,
         limit: int = 500,
     ) -> str:
         """Fetch daily investment performance and benchmark comparisons.
 
         Use get_holdings (not get_accounts) to discover account IDs — get_accounts
         may not list all accounts that have holdings (e.g. employer 401k plans,
-        crypto exchanges). An empty list returns every investment account. IDs
-        Empower doesn't recognize return empty investments and account_summaries
+        crypto exchanges). Omit account_ids (or pass []) for every investment
+        account. IDs Empower doesn't recognize return empty investments and account_summaries
         (benchmarks still come back). For large portfolios, query a few accounts
         at a time.
 
@@ -688,23 +696,26 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             account_ids: List of investment account IDs (integers). Use get_holdings to
-                find user_account_id values for investment accounts.
+                find user_account_id values for investment accounts. Default:
+                every investment account.
             limit: Maximum number of entries to return for each of the investments
                 and benchmarks lists (default 500). When there are more, the
                 newest whole days are kept for both lists and
                 ``truncated.next_end_date`` says where to page back from. The
                 newest day is always returned in full, even if it alone
-                exceeds limit.
+                exceeds limit. The response size cap often stops it first,
+                so page back rather than raising limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
-        limit < 1. If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        limit < 1.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         _check_limit(limit)
         client = _get_client(ctx)
-        result = client.get_performance(start_date, end_date, account_ids)
+        result = client.get_performance(start_date, end_date, account_ids or [])
         return _render(
             result, dated=("investments", "benchmarks"), limit=limit, start_date=start_date
         )
@@ -728,9 +739,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             end_date: End of date range (ISO format: YYYY-MM-DD).
 
         Errors: the call fails (isError) if start_date is after end_date.
-        If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         client = _get_client(ctx)
@@ -765,9 +776,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             interval: Sent to API but has no observable effect — all three intervals
                 are always returned. Defaults to MONTH.
 
-        Errors: the call fails (isError) if the session is expired, with a
-        message saying to call start_authentication, then
-        complete_authentication with the verification code if 2FA is required.
+        Errors: the call fails (isError) if the session is expired, with the
+        next step: call start_authentication, or, when the server has no
+        credentials, ask the user to run `pc2 login`.
         """
         today = date.today()
         effective_start = start_date or today
