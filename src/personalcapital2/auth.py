@@ -80,9 +80,11 @@ def login_suggestion(session_path: Path) -> str:
     other than the built-in default is named with ``--session``, so the login
     writes the file the retry reads.
     """
+    # Absolute: the user's terminal is rarely in the agent's working directory.
+    path = session_path.expanduser().absolute()
     command = "pc2 login"
-    if session_path.expanduser() != _BUILTIN_SESSION_PATH:
-        command += f" --session {shlex.quote(str(session_path))}"
+    if path != _BUILTIN_SESSION_PATH:
+        command += f" --session {shlex.quote(str(path))}"
     return f"Ask the user to run `{command}` in a terminal, then retry."
 
 
@@ -264,6 +266,7 @@ def run_authenticated[T](
         EmpowerAuthError: if re-authentication fails or the retried operation
             also fails.
     """
+    shown = session_path.expanduser().absolute()  # for messages read from another cwd
     if client is None:
         # Short-circuit cold starts: if there's no cached session, skip the
         # round-trip we know the API would reject and authenticate up front.
@@ -272,7 +275,7 @@ def run_authenticated[T](
         if not session_path.exists():
             log.info("No cached session at %s, authenticating", session_path)
             client = _reauthenticate(
-                session_path, f"No saved session at {session_path}.", interactive=interactive
+                session_path, f"No saved session at {shown}.", interactive=interactive
             )
         else:
             client = EmpowerClient(session_path=session_path)
@@ -286,9 +289,9 @@ def run_authenticated[T](
         # so "stale" is misleading — there was nothing to go stale.
         if client.has_loaded_session:
             log.warning("Session is stale, re-authenticating: %s", e)
-            problem = f"The saved session at {session_path} has expired."
+            problem = f"The saved session at {shown} has expired."
         else:
             log.warning("Cached session unusable, re-authenticating: %s", e)
-            problem = f"The saved session at {session_path} is unusable."
+            problem = f"The saved session at {shown} is unusable."
         fresh_client = _reauthenticate(session_path, problem, interactive=interactive)
         return operation(fresh_client)

@@ -6,10 +6,8 @@ import argparse
 import json
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1730,3 +1728,5 @@ def test_login_suggestion_names_non_default_session(tmp_path: Path) -> None:
     assert command(tmp_path / "my dir" / "s.json") == (
         f"pc2 login --session '{tmp_path / 'my dir' / 's.json'}'"
     )
+    # Relative paths are made absolute: the user's terminal has another cwd.
+    assert command(Path("my.json")) == f"pc2 login --session {Path.cwd() / 'my.json'}"

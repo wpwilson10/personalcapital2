@@ -71,7 +71,7 @@ code = wait_for_sms_code()  # your SMS pickup
 login.communicate(code + "\n")
 ```
 
-If Empower remembers the device, `pc2 login` finishes without sending a code, so wait on the SMS only after `2FA required — sending SMS verification code.` appears on stderr, and stop waiting if the process exits.
+If Empower remembers the device, `pc2 login` exits without sending a code.
 
 Without a terminal, data commands never read stdin: one that needs a new login fails at once with an `EmpowerAuthError` instead of prompting, and sends no SMS.
 

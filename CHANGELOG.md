@@ -42,9 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   email and password must come from `EMPOWER_EMAIL`/`EMPOWER_PASSWORD`. Reading
   them from piped stdin was never documented and no longer works.
 - **Data commands without a terminal no longer read credentials from stdin
-  either.** `printf 'email\npassword\n' | pc2 accounts` used to recover an
-  expired session when Empower remembered the device; set
-  `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` instead.
+  either.** Set `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` instead.
 - **MCP auth errors give one next step that can work.** With credentials set,
   they point to `start_authentication` as before. Without them, they ask the
   user to run `pc2 login` in a terminal. The `start_authentication`

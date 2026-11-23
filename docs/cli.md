@@ -93,7 +93,7 @@ code = wait_for_sms_code()  # your SMS pickup
 login.communicate(code + "\n")
 ```
 
-If Empower remembers the device, `pc2 login` finishes without sending a code, so wait on the SMS only after `2FA required — sending SMS verification code.` appears on stderr, and stop waiting if the process exits.
+If Empower remembers the device, `pc2 login` exits without sending a code.
 
 If stdin closes before a code arrives, `pc2 login` fails with `EmpowerAuthError`. An agent with no way to read the SMS shouldn't run `pc2 login` itself: it should ask the user to run it in a terminal.
 
