@@ -6,14 +6,13 @@ import argparse
 import json
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from personalcapital2.auth import login_suggestion
 from personalcapital2.cli import (
     EXIT_API,
     EXIT_AUTH,
@@ -348,10 +347,10 @@ def test_parser_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert "pc2" in captured.out
 
 
-def test_parser_performance_requires_account_ids() -> None:
+def test_parser_performance_account_ids_default_to_all() -> None:
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["performance", "--start", "today", "--end", "today"])
+    args = parser.parse_args(["performance", "--start", "today", "--end", "today"])
+    assert args.account_ids == []
 
 
 def test_parser_format_default_json() -> None:
@@ -1031,7 +1030,7 @@ def test_auth_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     err = json.loads(captured.err)
     assert err["type"] == "EmpowerAuthError"
     assert "interactive terminal" in err["error"]
-    assert err["suggestion"] == "pc2 login"
+    assert err["suggestion"] == login_suggestion(session)
 
 
 def test_api_error_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1109,7 +1108,7 @@ def test_no_session_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     err = json.loads(captured.err)
     assert err["type"] == "EmpowerAuthError"
     assert "interactive terminal" in err["error"]
-    assert err["suggestion"] == "pc2 login"
+    assert err["suggestion"] == login_suggestion(session_path)
 
 
 def test_no_command_shows_help(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1127,7 +1126,10 @@ def test_no_command_shows_help(capsys: pytest.CaptureFixture[str]) -> None:
 def test_cmd_login(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     session = tmp_path / "session.json"
 
-    with patch("personalcapital2.cli.authenticate") as mock_auth:
+    with (
+        patch("personalcapital2.cli._has_terminal", return_value=True),
+        patch("personalcapital2.cli.authenticate") as mock_auth,
+    ):
         mock_client = MagicMock()
         mock_auth.return_value = mock_client
         main(["--session", str(session), "login"])
@@ -1147,6 +1149,7 @@ def test_cmd_login_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str], 
     from personalcapital2.exceptions import LoginRejectedError
 
     with (
+        patch("personalcapital2.cli._has_terminal", return_value=True),
         patch("personalcapital2.cli.authenticate") as mock_auth,
         pytest.raises(SystemExit) as exc_info,
     ):
@@ -1441,7 +1444,7 @@ def test_singleton_exception_group_is_unwrapped(
     err = json.loads(captured.err)
     assert err["type"] == "EmpowerAuthError"
     assert "No session file" in err["error"]
-    assert err["suggestion"] == "pc2 login"
+    assert err["suggestion"] == login_suggestion(session)
 
 
 def test_multi_exception_group_is_not_unwrapped(
@@ -1562,3 +1565,197 @@ def test_broken_pipe_exits_quietly(tmp_path: Path, script: str) -> None:
 
     assert proc.returncode == 141
     assert proc.stderr == ""
+
+
+# --- No terminal, stdin an open pipe (subprocess: the bug was a blocking read) ---
+
+_FAKE_2FA_SCRIPT = """
+import sys
+import personalcapital2.auth as auth
+from personalcapital2.cli import main
+from personalcapital2.exceptions import EmpowerAuthError, TwoFactorRequiredError
+
+class _Fake:
+    has_loaded_session = True
+
+    def __init__(self, session_path=None):
+        pass
+
+    def get_accounts(self):
+        raise EmpowerAuthError("Session not authenticated.")
+
+    def login(self, email, password):
+        raise TwoFactorRequiredError()
+
+    def send_2fa_challenge(self, mode):
+        sys.stderr.write("SMS SENT\\n")
+
+    def verify_2fa_and_login(self, mode, code, password):
+        if code == "0000":
+            raise EmpowerAuthError("2FA verification failed: wrong code")
+        sys.stderr.write(f"CODE {code}\\n")
+
+    def save_session(self, path):
+        path.write_text("{}")
+
+if sys.argv[1] == "fake":
+    auth.EmpowerClient = _Fake
+main(sys.argv[2:])
+"""
+
+
+@pytest.mark.parametrize(
+    ("client", "creds", "command", "session_exists", "expected_error"),
+    [
+        ("real", False, "accounts", False, "No saved session at"),
+        ("real", False, "login", False, "Login requires an interactive terminal"),
+        ("fake", True, "accounts", True, "has expired."),
+    ],
+    ids=["data-no-creds", "login-no-creds", "data-creds-2fa"],
+)
+def test_no_terminal_open_stdin_fails_fast(
+    tmp_path: Path,
+    client: str,
+    creds: bool,
+    command: str,
+    session_exists: bool,
+    expected_error: str,
+) -> None:
+    """An agent harness often leaves stdin as an open pipe. pc2 must not block
+    reading credentials from it, and must not send an SMS no one can enter."""
+    import os
+    import subprocess
+    import sys
+
+    session = tmp_path / "session.json"
+    if session_exists:
+        session.write_text("{}")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("EMPOWER_")}
+    if creds:
+        env |= {"EMPOWER_EMAIL": "user@example.com", "EMPOWER_PASSWORD": "secret"}
+    proc = subprocess.Popen(  # noqa: S603 — fixed interpreter and inline test script
+        [sys.executable, "-c", _FAKE_2FA_SCRIPT, client, "--session", str(session), command],
+        stdin=subprocess.PIPE,  # held open for the whole run
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        code = proc.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        pytest.fail("pc2 blocked on stdin")
+    finally:
+        assert proc.stdin is not None
+        proc.stdin.close()
+    assert proc.stderr is not None
+    stderr = proc.stderr.read()
+    proc.stderr.close()
+    assert proc.stdout is not None
+    proc.stdout.close()
+
+    assert code == EXIT_AUTH
+    assert "Email:" not in stderr
+    assert "SMS SENT" not in stderr
+    err = json.loads(stderr.rstrip("\n").splitlines()[-1])
+    assert err["type"] == "EmpowerAuthError"
+    assert expected_error in err["error"]
+    assert err["suggestion"] == login_suggestion(session)
+    assert f"--session {session}" in err["suggestion"]
+
+
+def test_headless_login_reads_only_the_code_from_stdin(tmp_path: Path) -> None:
+    """The documented headless flow: no terminal, credentials in env, the caller
+    writes the SMS code to stdin once the text arrives."""
+    import os
+    import subprocess
+    import sys
+
+    session = tmp_path / "session.json"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("EMPOWER_")}
+    env |= {"EMPOWER_EMAIL": "user@example.com", "EMPOWER_PASSWORD": "secret"}
+    proc = subprocess.run(  # noqa: S603 — fixed interpreter and inline test script
+        [sys.executable, "-c", _FAKE_2FA_SCRIPT, "fake", "--session", str(session), "login"],
+        input="1234\n",
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=20,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "SMS SENT" in proc.stderr
+    assert "CODE 1234" in proc.stderr
+    assert json.loads(proc.stdout) == {"session_path": str(session), "authenticated": True}
+    assert session.exists()
+
+
+def test_headless_login_wrong_code_error_is_its_own_last_line(tmp_path: Path) -> None:
+    """A piped code isn't echoed, so the prompt line must be ended before the
+    JSON error, or callers parsing the last stderr line get the prompt glued on."""
+    import os
+    import subprocess
+    import sys
+
+    session = tmp_path / "session.json"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("EMPOWER_")}
+    env |= {"EMPOWER_EMAIL": "user@example.com", "EMPOWER_PASSWORD": "secret"}
+    proc = subprocess.run(  # noqa: S603 — fixed interpreter and inline test script
+        [sys.executable, "-c", _FAKE_2FA_SCRIPT, "fake", "--session", str(session), "login"],
+        input="0000\n",
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=20,
+        check=False,
+    )
+
+    assert proc.returncode == EXIT_AUTH
+    err = json.loads(proc.stderr.rstrip("\n").splitlines()[-1])
+    assert err["type"] == "EmpowerAuthError"
+    assert "2FA verification failed" in err["error"]
+    assert not session.exists()
+
+
+@pytest.mark.parametrize("terminal", [True, False])
+def test_data_commands_prompt_only_with_a_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminal: bool
+) -> None:
+    """Someone at a terminal can still be prompted for the code on recovery."""
+    seen: list[bool] = []
+
+    def fake_run_authenticated(
+        operation: object, session_path: Path, *, interactive: bool
+    ) -> MagicMock:
+        seen.append(interactive)
+        return MagicMock()
+
+    monkeypatch.setattr("personalcapital2.cli._has_terminal", lambda: terminal)
+
+    def no_output(*_args: object) -> None:
+        pass
+
+    monkeypatch.setattr("personalcapital2.cli._output", no_output)
+    monkeypatch.setattr("personalcapital2.cli.run_authenticated", fake_run_authenticated)
+    main(["--session", str(tmp_path / "session.json"), "accounts"])
+
+    assert seen == [terminal]
+
+
+def test_login_suggestion_names_non_default_session(tmp_path: Path) -> None:
+    """A bare `pc2 login` writes the built-in default; any other file must be named
+    or the retry reads a file the login never wrote."""
+    from personalcapital2.client import DEFAULT_SESSION_DIR
+
+    def command(session: Path) -> str:
+        return login_suggestion(session).split("`")[1]
+
+    assert command(DEFAULT_SESSION_DIR / "session.json") == "pc2 login"
+    assert command(tmp_path / "s.json") == f"pc2 login --session {tmp_path / 's.json'}"
+    assert command(tmp_path / "my dir" / "s.json") == (
+        f"pc2 login --session '{tmp_path / 'my dir' / 's.json'}'"
+    )
+    # Relative paths are made absolute: the user's terminal has another cwd.
+    assert command(Path("my.json")) == f"pc2 login --session {Path.cwd() / 'my.json'}"

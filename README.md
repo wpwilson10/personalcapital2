@@ -56,18 +56,24 @@ Credentials go to Empower over HTTPS only — never stored, logged, or transmitt
 
 > **Note:** Empower removed email 2FA — verification codes are sent by SMS only. `EMPOWER_2FA_MODE` is kept for compatibility but now only accepts `sms`; a stale `email` value raises a clear error pointing you to SMS.
 
-Sessions live ~24 hours. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` so commands self-heal when a session expires; otherwise re-run `pc2 login`. Override the session path per-command with `--session`.
+Sessions live ~24 hours. With `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` set, a command whose session has expired signs in again on its own, as long as Empower doesn't ask for a new SMS code. When it does, the command prompts for the code in a terminal. Without a terminal, it fails before any code is sent, and you run `pc2 login`. Override the session path per-command with `--session`.
 
 #### Headless authentication
 
-For unattended invocation, pipe the verification code on stdin:
+Without a terminal, `pc2 login` takes the email and password from `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` and reads only the SMS code from stdin. The code doesn't exist until `pc2 login` has asked Empower to send it, so start the command with stdin as a pipe and write the code once it arrives:
 
-```bash
-EMPOWER_EMAIL=... EMPOWER_PASSWORD=... \
-    printf '%s\n' "$CODE" | pc2 login
+```python
+import subprocess
+
+# EMPOWER_EMAIL and EMPOWER_PASSWORD are set in the environment.
+login = subprocess.Popen(["pc2", "login"], stdin=subprocess.PIPE, text=True)
+code = wait_for_sms_code()  # your SMS pickup
+login.communicate(code + "\n")
 ```
 
-The orchestrator handles SMS code pickup; `pc2` reads the code from stdin.
+If Empower remembers the device, `pc2 login` exits without sending a code. Empower remembers it through the cookies in the session file, so logging in to a new `--session` file always sends one.
+
+Without a terminal, data commands never read stdin: one that needs a new login fails at once with an `EmpowerAuthError` instead of prompting, and sends no SMS.
 
 ## CLI
 
@@ -158,8 +164,9 @@ This library uses Empower's unofficial internal web API, which is not affiliated
 - **Benchmarks are Empower's blended indexes.** `benchmarks` in `get_performance` are `^PC_US_STOCKS`, `^PC_US_BONDS`, `^PC_INTL_STOCKS`, `^PC_INTL_BONDS`, `^PC_ALTERNATIVES` and `^PC_BLENDED`, not the S&P 500. The S&P 500 is in `get_quotes`.
 - **`portfolio_vs_benchmark` values are percentages.** `portfolio_value` and `sp500_value` come from the API's `YOU` and `^INX` series: cumulative percent change since the first day of the range, not dollar values.
 - **Histories start with a baseline row.** Performance and quotes histories begin on the trading day before `start_date` (or the first available date) with a value of 0.
-- **Unknown account IDs aren't an error.** `get_performance` with IDs Empower doesn't recognize returns empty `investments` and `account_summaries`; benchmarks still come back. An empty list returns every investment account.
+- **Unknown account IDs aren't an error.** `get_performance` with IDs Empower doesn't recognize returns empty `investments` and `account_summaries`; benchmarks still come back. With no IDs (omit `--account-ids` or `account_ids`, or pass an empty list), it returns every investment account.
 - **Row order isn't guaranteed.** Transactions came back newest-first in 2026-03 and oldest-first on 2026-11-21 with the same request (the client asks for newest-first; Empower doesn't reliably honor it). Sort by `date` if order matters.
 - **`get_spending` ignores date range and interval.** The API always returns current-period spending for all three interval types (MONTH, WEEK, YEAR), regardless of the `start_date`, `end_date`, or `interval` parameters.
 - **Only email-address logins are supported.** Accounts that sign in with a username get `LoginRejectedError` with Empower's code (113 or 207). Those accounts go through Empower's newer login, which this library doesn't support yet ([#9](https://github.com/wpwilson10/personalcapital2/issues/9)).
-- **Sessions expire.** Typically ~24 hours, sometimes sooner. CLI users run `pc2 login` again; MCP users let the agent call `start_authentication` / `complete_authentication`. Stale-session recovery handles this automatically when `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` are set.
+- **A rejected password also ends the session.** After a `LoginRejectedError`, Empower no longer accepts the saved session, even though the file is kept, so data calls fail with an expired-session error until someone logs in with the right password.
+- **Sessions expire.** Typically ~24 hours, sometimes sooner. CLI users run `pc2 login` again; MCP users let the agent call `start_authentication` / `complete_authentication`. Stale-session recovery handles this automatically when `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` are set and Empower doesn't ask for a new SMS code. `pc2 status` only reads the session file: `"exists": true` doesn't mean Empower still accepts the session.

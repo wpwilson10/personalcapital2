@@ -5,6 +5,86 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-11-22
+
+### Fixed
+
+- **`pc2` no longer blocks on stdin without a terminal.** A data command that
+  needed a new login, or `pc2 login` without `EMPOWER_EMAIL`/`EMPOWER_PASSWORD`,
+  read the email and password from stdin. With stdin as an open pipe, as many
+  agent harnesses leave it, the command waited forever. It now fails at once
+  with exit 1.
+- **Data commands no longer send an SMS no one can enter.** With credentials
+  set and no terminal, re-authenticating after an expired session sent the SMS
+  code, then waited for it on stdin or failed. Each retry sent another. Now the
+  command fails before sending, and says `No code was sent.`
+- **MCP: an abandoned 2FA challenge no longer hides a terminal login.** While a
+  challenge from `start_authentication` was pending, data tools stopped
+  reloading the session file, so a session saved by `pc2 login` was never
+  picked up. The challenge now lives on its own client, and data tools always
+  reload.
+- **Headless `pc2 login`: a failed code's JSON error is on its own line.** A
+  piped code isn't echoed, so the error was appended to the
+  `Enter verification code:` prompt and the last stderr line wasn't valid JSON.
+
+### Changed
+
+- **CLI auth errors say what was wrong with the session.** When a data command
+  needs a login it can't do, `error` starts with `No saved session at ...`,
+  `The saved session at ... has expired.` or `The saved session at ... is
+  unusable.`, then says why it couldn't sign in. The `type` is still
+  `EmpowerAuthError`. Library callers of `run_authenticated()` get the same
+  prefix on `InteractiveAuthRequired`.
+- **The `suggestion` for CLI auth errors** is now
+  ``Ask the user to run `pc2 login` in a terminal, then retry.`` (was
+  `pc2 login`). An agent that runs `pc2 login` itself, without a way to read the
+  SMS, can't finish it. When the session file isn't the default, the command
+  includes `--session <path>`; the MCP server's messages do the same for its
+  session file.
+- **`pc2 login` without a terminal reads only the SMS code from stdin.** The
+  email and password must come from `EMPOWER_EMAIL`/`EMPOWER_PASSWORD`. Reading
+  them from piped stdin was never documented and no longer works.
+- **Data commands without a terminal no longer read credentials from stdin
+  either.** Set `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` instead.
+- **`--account-ids` is optional** for `pc2 performance` and `pc2 benchmarks`,
+  and `account_ids` is optional for the MCP `get_performance` tool. Leaving it
+  out returns every investment account, as an empty list already did.
+- **`pc2 login`, `logout` and `status` print `session_path` as an absolute
+  path**, matching the auth errors.
+- **MCP: a failed SMS send says not to retry right away.** For example, when
+  Empower has locked text-message codes after several in a row, each
+  `start_authentication` call would send another.
+- **MCP auth errors give one next step that can work.** With credentials set,
+  they point to `start_authentication` as before. Without them, they ask the
+  user to run `pc2 login` in a terminal. The `start_authentication`
+  missing-credentials error offers the same.
+
+### Added
+
+- `interactive` keyword argument on `authenticate()` and `run_authenticated()`
+  (default `True`, the old behavior). With `False`, nothing is read from stdin
+  and a login that needs an SMS code raises `InteractiveAuthRequired` before
+  the code is sent; a stale session file is kept rather than deleted. Test
+  doubles that replace `authenticate` need to accept the new keyword.
+
+### Documentation
+
+- MCP tool descriptions no longer say every expired session leads to
+  `start_authentication`; without credentials, the next step is asking the
+  user to run `pc2 login`. The `limit` descriptions say the response size cap
+  often stops a list first, so agents page back instead of raising `limit`.
+- Empower remembers a device through the session file's cookies, so a login
+  to a new `--session` file always sends an SMS code.
+- A rejected password also ends the saved session on Empower's side (a new
+  known quirk), so data calls fail until a login with the right password.
+- The headless login example works: it started `pc2 login` with the
+  credentials applied to `printf` instead, and piped a code that couldn't exist
+  yet.
+- Stale-session recovery is described as working only when Empower doesn't ask
+  for a new SMS code.
+- `pc2 status` reads only the session file; `"exists": true` doesn't mean the
+  session is still valid.
+
 ## [0.6.0] — 2026-11-21
 
 ### Breaking

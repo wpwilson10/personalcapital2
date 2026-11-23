@@ -51,7 +51,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from personalcapital2._serialization import serialize_result
-from personalcapital2.auth import parse_2fa_mode_env
+from personalcapital2.auth import login_suggestion, parse_2fa_mode_env
 from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
 from personalcapital2.exceptions import (
     EmpowerAPIError,
@@ -82,6 +82,10 @@ class _AppContext:
     client: EmpowerClient
     session_path: Path
     pending_2fa_mode: TwoFactorMode | None = None
+    # The client a 2FA challenge was sent from. complete_authentication verifies
+    # against its in-memory cookies, so it is kept apart from ``client``, which
+    # data tools reload from disk on every call.
+    pending_client: EmpowerClient | None = None
 
 
 def _get_client(ctx: Context[_AppContext]) -> EmpowerClient:
@@ -90,17 +94,17 @@ def _get_client(ctx: Context[_AppContext]) -> EmpowerClient:
     Reloads the session from disk on each call so the long-running server
     picks up fresh sessions after re-authentication — whether via
     ``pc2 login`` from another terminal or via ``start_authentication`` /
-    ``complete_authentication`` MCP tools.
-
-    Skips the reload during a 2FA window: ``load_session()`` replaces
-    ``self._session.cookies`` (not merge), which would clobber the in-memory
-    challenge cookies that ``complete_authentication`` needs to verify
-    against — leaving the agent with a mysterious verification failure.
+    ``complete_authentication`` MCP tools. That holds during a pending 2FA
+    challenge too: the challenge lives on ``pending_client``, so an abandoned
+    challenge never stops a terminal login from being picked up.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
-    if app_ctx.pending_2fa_mode is None:
-        app_ctx.client.load_session()
+    app_ctx.client.load_session()
     return app_ctx.client
+
+
+def _has_credentials() -> bool:
+    return bool(os.getenv("EMPOWER_EMAIL") and os.getenv("EMPOWER_PASSWORD"))
 
 
 def _check_date_range(start_date: date, end_date: date) -> None:
@@ -289,7 +293,7 @@ def _render(
     return _dump(data)
 
 
-def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
+def _handle_tool_errors[**P](fn: Callable[P, str], *, session_path: Path) -> Callable[P, str]:
     """Decorator that turns client exceptions into ``ToolError`` with an agent-friendly message.
 
     ``ToolError`` reaches the client as ``isError: true`` with the message intact
@@ -303,12 +307,19 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
             return fn(*args, **kwargs)
         except EmpowerAuthError as exc:
             log.warning("Auth error in tool call: %s", exc)
-            raise ToolError(
-                f"{exc}\n\n"
-                "Session is expired or invalid. Call start_authentication to "
-                "begin re-auth, then complete_authentication with the "
-                "verification code if 2FA is required."
-            ) from exc
+            # One next step, and one that can work: without credentials,
+            # start_authentication always fails.
+            if _has_credentials():
+                next_step = (
+                    "Call start_authentication to begin re-auth, then "
+                    "complete_authentication with the verification code if 2FA is required."
+                )
+            else:
+                next_step = (
+                    "This server has no EMPOWER_EMAIL/EMPOWER_PASSWORD to sign in with. "
+                    + login_suggestion(session_path)
+                )
+            raise ToolError(f"{exc}\n\nSession is expired or invalid. {next_step}") from exc
         except EmpowerNetworkError as exc:
             log.warning("Network error in tool call: %s", exc)
             raise ToolError(
@@ -352,9 +363,9 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
     password = os.getenv("EMPOWER_PASSWORD")
     if not email or not password:
         raise ToolError(
-            "EMPOWER_EMAIL and/or EMPOWER_PASSWORD not set. "
-            "Add them to the 'env' block of your MCP server config "
-            "and restart the MCP server."
+            "EMPOWER_EMAIL and/or EMPOWER_PASSWORD not set, so this server can't sign in. "
+            f"{login_suggestion(app_ctx.session_path)} To sign in from chat instead, add "
+            "both to the 'env' block of the MCP server config and restart the MCP server."
         )
 
     # Mint a fresh client per attempt (mirrors authenticate() at auth.py).
@@ -381,10 +392,14 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
                 "Check connection and try again."
             ) from exc
         except (EmpowerAuthError, EmpowerAPIError) as exc:
-            raise ToolError(f"2FA challenge dispatch failed: {exc}") from exc
-        # Commit the partial-auth-state client so complete_authentication
-        # can verify against the same cookies the challenge was issued on.
-        app_ctx.client = fresh_client
+            raise ToolError(
+                f"{str(exc).rstrip('.')}. Each start_authentication call sends a new SMS, "
+                "so don't retry right away."
+            ) from exc
+        # Keep the partial-auth-state client so complete_authentication can
+        # verify against the same cookies the challenge was issued on. It stays
+        # out of app_ctx.client so data tools keep reloading the session file.
+        app_ctx.pending_client = fresh_client
         app_ctx.pending_2fa_mode = mode
         return (
             f"2FA challenge sent via {mode.value}. "
@@ -407,6 +422,7 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
     fresh_client.save_session()
     app_ctx.client = fresh_client
     app_ctx.pending_2fa_mode = None
+    app_ctx.pending_client = None
     return "Authenticated."
 
 
@@ -421,7 +437,8 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
     challenge.
     """
     app_ctx: _AppContext = ctx.request_context.lifespan_context
-    if app_ctx.pending_2fa_mode is None:
+    pending_client = app_ctx.pending_client
+    if app_ctx.pending_2fa_mode is None or pending_client is None:
         raise ToolError("No pending 2FA challenge. Call start_authentication first.")
     password = os.getenv("EMPOWER_PASSWORD")
     if not password:
@@ -431,7 +448,7 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
         )
     mode = app_ctx.pending_2fa_mode
     try:
-        app_ctx.client.verify_2fa_and_login(mode, code, password)
+        pending_client.verify_2fa_and_login(mode, code, password)
     except EmpowerNetworkError as exc:
         # Don't clear pending_2fa_mode — the code may still be valid;
         # the agent can retry complete_authentication once connectivity
@@ -442,17 +459,21 @@ def complete_authentication(ctx: Context[_AppContext], code: str) -> str:
     except LoginRejectedError as exc:
         # The code was accepted but Empower rejected the password.
         app_ctx.pending_2fa_mode = None
+        app_ctx.pending_client = None
         raise ToolError(str(exc)) from exc
     except (EmpowerAuthError, EmpowerAPIError) as exc:
         # Wrong code or server rejection — clear state so the agent can
         # restart cleanly via start_authentication. The client's message
         # already starts "2FA verification failed: ...".
         app_ctx.pending_2fa_mode = None
+        app_ctx.pending_client = None
         raise ToolError(
             f"{str(exc).rstrip('.')}. Call start_authentication to send a new code."
         ) from exc
+    pending_client.save_session()
+    app_ctx.client = pending_client
     app_ctx.pending_2fa_mode = None
-    app_ctx.client.save_session()
+    app_ctx.pending_client = None
     return "Authenticated."
 
 
@@ -480,6 +501,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         client = EmpowerClient(session_path=resolved_path)
         yield _AppContext(client=client, session_path=resolved_path)
 
+    def handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
+        return _handle_tool_errors(fn, session_path=resolved_path)
+
     mcp = MCPServer(
         name="empower",
         version=_package_version("personalcapital2"),
@@ -492,7 +516,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
     # clear purpose. State (pending_2fa_mode) lives on _AppContext so the
     # verification code can be collected from the user mid-conversation.
     #
-    # These deliberately do NOT use @_handle_tool_errors — that decorator
+    # These deliberately do NOT use @handle_tool_errors — that decorator
     # would direct callers BACK to start_authentication on EmpowerAuthError,
     # producing a self-referential error loop. Errors are raised as ToolError
     # inside the module-level start_authentication / complete_authentication
@@ -510,7 +534,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
     # which causes Claude Code to silently drop all tools (anthropics/claude-code#25081).
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_accounts(ctx: Context[_AppContext]) -> str:
         """List all linked financial accounts with aggregate summary.
 
@@ -518,15 +542,15 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         with net worth, total assets, and total liabilities.
         No parameters required.
 
-        Errors: the call fails (isError) if the session is expired, with a
-        message saying to call start_authentication, then
-        complete_authentication with the verification code if 2FA is required.
+        Errors: the call fails (isError) if the session is expired, with the
+        next step: call start_authentication, or, when the server has no
+        credentials, ask the user to run `pc2 login`.
         """
         client = _get_client(ctx)
         return _render(client.get_accounts(), undated=("accounts",))
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_transactions(
         ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 100
     ) -> str:
@@ -543,12 +567,14 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
                 When there are more, the newest whole days are kept and
                 ``truncated.next_end_date`` says where to page back from. The
                 newest day is always returned in full, even if it alone
-                exceeds limit.
+                exceeds limit. The response size cap often stops it first,
+                so page back rather than raising limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
-        limit < 1. If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        limit < 1.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         _check_limit(limit)
@@ -557,7 +583,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         return _render(result, dated=("transactions",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_holdings(ctx: Context[_AppContext], limit: int = 100) -> str:
         """Fetch current investment holdings across all accounts.
 
@@ -569,16 +595,16 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
                 first holdings are kept. Total value is always complete.
 
         Errors: the call fails (isError) if limit < 1.
-        If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_limit(limit)
         client = _get_client(ctx)
         return _render(client.get_holdings(), undated=("holdings",), limit=limit)
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_net_worth(
         ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 180
     ) -> str:
@@ -593,12 +619,15 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             end_date: End of date range (ISO format: YYYY-MM-DD).
             limit: Maximum number of daily entries to return (default 180).
                 When there are more, the newest days are kept and
-                ``truncated.next_end_date`` says where to page back from.
+                ``truncated.next_end_date`` says where to page back from. The
+                response size cap can stop it first, so page back rather than
+                raising limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
-        limit < 1. If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        limit < 1.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         _check_limit(limit)
@@ -607,7 +636,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         return _render(result, dated=("entries",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_account_balances(
         ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 500
     ) -> str:
@@ -624,12 +653,15 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
                 When there are more, the newest whole days are kept (every
                 account for each day shown) and ``truncated.next_end_date``
                 says where to page back from. The newest day is always
-                returned in full, even if it alone exceeds limit.
+                returned in full, even if it alone exceeds limit. The response
+                size cap often stops it first, so page back rather than
+                raising limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
-        limit < 1. If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        limit < 1.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         _check_limit(limit)
@@ -638,20 +670,20 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         return _render(result, dated=("balances",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_performance(
         ctx: Context[_AppContext],
         start_date: date,
         end_date: date,
-        account_ids: list[int],
+        account_ids: list[int] | None = None,
         limit: int = 500,
     ) -> str:
         """Fetch daily investment performance and benchmark comparisons.
 
         Use get_holdings (not get_accounts) to discover account IDs — get_accounts
         may not list all accounts that have holdings (e.g. employer 401k plans,
-        crypto exchanges). An empty list returns every investment account. IDs
-        Empower doesn't recognize return empty investments and account_summaries
+        crypto exchanges). Omit account_ids (or pass []) for every investment
+        account. IDs Empower doesn't recognize return empty investments and account_summaries
         (benchmarks still come back). For large portfolios, query a few accounts
         at a time.
 
@@ -667,29 +699,32 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
             account_ids: List of investment account IDs (integers). Use get_holdings to
-                find user_account_id values for investment accounts.
+                find user_account_id values for investment accounts. Default:
+                every investment account.
             limit: Maximum number of entries to return for each of the investments
                 and benchmarks lists (default 500). When there are more, the
                 newest whole days are kept for both lists and
                 ``truncated.next_end_date`` says where to page back from. The
                 newest day is always returned in full, even if it alone
-                exceeds limit.
+                exceeds limit. The response size cap often stops it first,
+                so page back rather than raising limit.
 
         Errors: the call fails (isError) if start_date is after end_date or
-        limit < 1. If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        limit < 1.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         _check_limit(limit)
         client = _get_client(ctx)
-        result = client.get_performance(start_date, end_date, account_ids)
+        result = client.get_performance(start_date, end_date, account_ids or [])
         return _render(
             result, dated=("investments", "benchmarks"), limit=limit, start_date=start_date
         )
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_quotes(ctx: Context[_AppContext], start_date: date, end_date: date) -> str:
         """Fetch portfolio vs S&P 500 comparison, portfolio snapshot, and market quotes.
 
@@ -707,9 +742,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             end_date: End of date range (ISO format: YYYY-MM-DD).
 
         Errors: the call fails (isError) if start_date is after end_date.
-        If the session is expired, it fails with a message saying to call
-        start_authentication, then complete_authentication with the
-        verification code if 2FA is required.
+        If the session is expired, it fails with the next step: call
+        start_authentication, or, when the server has no credentials, ask the
+        user to run `pc2 login`.
         """
         _check_date_range(start_date, end_date)
         client = _get_client(ctx)
@@ -722,7 +757,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         )
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_spending(
         ctx: Context[_AppContext],
         start_date: date | None = None,
@@ -744,9 +779,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
             interval: Sent to API but has no observable effect — all three intervals
                 are always returned. Defaults to MONTH.
 
-        Errors: the call fails (isError) if the session is expired, with a
-        message saying to call start_authentication, then
-        complete_authentication with the verification code if 2FA is required.
+        Errors: the call fails (isError) if the session is expired, with the
+        next step: call start_authentication, or, when the server has no
+        credentials, ask the user to run `pc2 login`.
         """
         today = date.today()
         effective_start = start_date or today
