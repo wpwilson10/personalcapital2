@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   often stops a list first, so agents page back instead of raising `limit`.
 - Empower remembers a device through the session file's cookies, so a login
   to a new `--session` file always sends an SMS code.
+- A rejected password also ends the saved session on Empower's side (a new
+  known quirk), so data calls fail until a login with the right password.
 - The headless login example works: it started `pc2 login` with the
   credentials applied to `printf` instead, and piped a code that couldn't exist
   yet.

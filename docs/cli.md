@@ -124,7 +124,7 @@ Earlier stderr lines can hold log warnings or a login prompt, so parse the last 
 
 The `suggestion` field appears when a concrete recovery action is available (auth errors, a malformed `--account-ids`). Account IDs Empower doesn't recognize aren't an error: `performance` and `benchmarks` return empty `investments` and `account_summaries` (benchmarks still come back). Find investment account IDs with `pc2 holdings`.
 
-`"type": "LoginRejectedError"` (exit 1) means Empower rejected the sign-in (the username or the password): `error` starts with Empower's own codes and messages, and there is no `suggestion`, because logging in again with the same credentials fails the same way. Accounts that sign in with a username rather than an email address get code 113 or 207 and aren't supported yet.
+`"type": "LoginRejectedError"` (exit 1) means Empower rejected the sign-in (the username or the password): `error` starts with Empower's own codes and messages, and there is no `suggestion`, because logging in again with the same credentials fails the same way. Empower also ends the saved session, so data commands fail until a login with the right password. Accounts that sign in with a username rather than an email address get code 113 or 207 and aren't supported yet.
 
 ## Date shortcuts
 
