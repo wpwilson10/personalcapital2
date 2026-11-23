@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Account balances cover every account.** `get_account_balances`, `pc2
+  balances` and the MCP `get_account_balances` tool returned only investment
+  accounts, because Empower leaves bank and credit-card accounts out of a
+  balances-only request. They now return every account, so responses are
+  larger. The MCP tool's default `limit` is now 1000, so a month still fits
+  in one call. `summary.latest_total` is now
+  the sum over every account, which equals Empower's `aggregateBalance`.
+  Amounts owed count as positive, so it is not net worth. Before, it was the
+  investment total.
+
+### Documentation
+
+- Per-account `performance` is a cumulative percent and can be badly wrong,
+  even with the wrong sign, when money moved in or out of the account. Check it
+  against `date_range_performance_value_change`.
+
 ## [0.6.1] — 2026-11-22
 
 ### Fixed

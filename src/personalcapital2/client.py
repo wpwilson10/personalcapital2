@@ -230,9 +230,9 @@ def _compute_balances_summary(
 ) -> AccountBalancesSummary:
     """Compute a summary from parsed balance data.
 
-    The API does not provide a pre-computed summary for this endpoint,
-    so we derive one: count of unique accounts, the latest date, and the
-    sum of each account's balance on that date.
+    Count of unique accounts, the latest date, and the sum of each account's
+    balance on that date, which equals the API's ``aggregateBalance``. Amounts
+    owed (credit cards, loans) are positive, so the sum is not net worth.
     """
     if not balances:
         return AccountBalancesSummary(account_count=0, latest_date=None, latest_total=Decimal(0))
@@ -444,7 +444,9 @@ class EmpowerClient:
                 "startDate": start.isoformat(),
                 "endDate": end.isoformat(),
                 "interval": "DAY",
-                "types": '["balances"]',
+                # "balances" alone returns only investment accounts; with
+                # "networth" Empower includes bank and credit-card accounts too.
+                "types": '["balances","networth"]',
                 "includeNetworthCategoryDetails": "true",
             },
         )

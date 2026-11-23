@@ -191,6 +191,8 @@ Returned via `AccountBalancesResult.balances` from `client.get_account_balances(
 
 ### InvestmentPerformance
 
+`performance` is the cumulative percent change since the start of the range. Empower's per-account figures can be far off, even with the wrong sign, when money moved in or out of the account (see Known API quirks in the README).
+
 | Field | Type |
 |---|---|
 | `date` | `date` |
@@ -248,7 +250,7 @@ Returned via `AccountBalancesResult.balances` from `client.get_account_balances(
 
 ### AccountBalancesSummary
 
-Computed from parsed balance data (the API does not provide a pre-computed summary for this endpoint).
+Computed from parsed balance data. `latest_total` is the sum of every account's balance on `latest_date`, which equals the API's `aggregateBalance`. Amounts owed (credit cards, loans) are positive, so it is not net worth: use `NetWorthEntry.networth` (from `get_net_worth`) or `AccountsSummary.networth`.
 
 | Field | Type |
 |---|---|

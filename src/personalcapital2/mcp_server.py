@@ -638,18 +638,24 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
     @mcp.tool(structured_output=False)
     @handle_tool_errors
     def get_account_balances(
-        ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 500
+        ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 1000
     ) -> str:
         """Fetch daily account balance history for all accounts.
 
-        Returns daily balances for each account, with account ID and balance
-        amount, plus a summary with account count, latest date, and total
-        balance. The summary is always complete.
+        Returns daily balances for each account (bank, credit card, investment
+        and others), with account ID and balance amount, plus a summary with
+        account count, latest date, and latest_total. The summary is always
+        complete. Amounts owed (credit cards, loans) are positive, and a credit
+        balance is negative, so latest_total is not net worth: use
+        get_net_worth for that, and get_accounts to tell which accounts are
+        liabilities. Closed accounts can return zero balances after the close
+        date, and count in account_count. A balance Empower couldn't refresh
+        that day usually repeats the previous day's value.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).
             end_date: End of date range (ISO format: YYYY-MM-DD).
-            limit: Maximum number of balance entries to return (default 500).
+            limit: Maximum number of balance entries to return (default 1000).
                 When there are more, the newest whole days are kept (every
                 account for each day shown) and ``truncated.next_end_date``
                 says where to page back from. The newest day is always
@@ -693,7 +699,13 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         per-account summaries with balance, income, and returns. Account
         summaries are always complete. Histories start with a baseline row
         (value 0) on the trading day before start_date, or the first available
-        date.
+        date. Performance values are cumulative percent change since the start
+        of the range. Empower's per-account percentages can be badly wrong,
+        even with the wrong sign (for example near -100% for an account that
+        gained), when money moved in or out of the account, and cash_flow in
+        account_summaries doesn't always show that move. Check each account's
+        percentage against the sign and size of
+        date_range_performance_value_change in account_summaries.
 
         Args:
             start_date: Start of date range (ISO format: YYYY-MM-DD).

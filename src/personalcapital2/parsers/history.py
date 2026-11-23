@@ -41,6 +41,7 @@ _KNOWN_BAL_KEYS = frozenset(
     {
         "date",
         "balances",
+        "aggregateBalance",
     }
 )
 
