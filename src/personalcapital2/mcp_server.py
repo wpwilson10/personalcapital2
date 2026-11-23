@@ -392,7 +392,10 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
                 "Check connection and try again."
             ) from exc
         except (EmpowerAuthError, EmpowerAPIError) as exc:
-            raise ToolError(f"2FA challenge dispatch failed: {exc}") from exc
+            raise ToolError(
+                f"{str(exc).rstrip('.')}. Each start_authentication call sends a new SMS, "
+                "so don't retry right away."
+            ) from exc
         # Keep the partial-auth-state client so complete_authentication can
         # verify against the same cookies the challenge was issued on. It stays
         # out of app_ctx.client so data tools keep reloading the session file.

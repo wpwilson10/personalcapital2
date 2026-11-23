@@ -71,7 +71,7 @@ code = wait_for_sms_code()  # your SMS pickup
 login.communicate(code + "\n")
 ```
 
-If Empower remembers the device, `pc2 login` exits without sending a code.
+If Empower remembers the device, `pc2 login` exits without sending a code. Empower remembers it through the cookies in the session file, so logging in to a new `--session` file always sends one.
 
 Without a terminal, data commands never read stdin: one that needs a new login fails at once with an `EmpowerAuthError` instead of prompting, and sends no SMS.
 

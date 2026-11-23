@@ -1572,6 +1572,28 @@ def test_start_authentication_2fa_required(
     assert app_ctx.client is original_client
 
 
+def test_start_authentication_dispatch_failure_says_not_to_retry(
+    tmp_path: Path,
+    auth_env: None,
+    patch_auth_client: None,
+) -> None:
+    """Each call sends an SMS; when Empower refuses (e.g. it locked text codes),
+    the error must not invite an immediate retry."""
+    app_ctx = _make_app_ctx(tmp_path)
+    _FakeAuthClient.login_recipe = [TwoFactorRequiredError()]
+    _FakeAuthClient.send_2fa_recipe = [
+        EmpowerAuthError("2FA challenge failed: Text message credential is locked.")
+    ]
+
+    with pytest.raises(ToolError) as exc_info:
+        start_authentication(_make_ctx(app_ctx))
+
+    msg = str(exc_info.value)
+    assert msg.startswith("2FA challenge failed: Text message credential is locked. ")
+    assert "don't retry right away" in msg
+    assert app_ctx.pending_client is None
+
+
 def test_start_authentication_missing_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

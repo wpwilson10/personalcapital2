@@ -94,7 +94,7 @@ code = wait_for_sms_code()  # your SMS pickup
 login.communicate(code + "\n")
 ```
 
-If Empower remembers the device, `pc2 login` exits without sending a code.
+If Empower remembers the device, `pc2 login` exits without sending a code. Empower remembers it through the cookies in the session file, so logging in to a new `--session` file always sends one.
 
 If stdin closes before a code arrives, `pc2 login` fails with `EmpowerAuthError`. An agent with no way to read the SMS shouldn't run `pc2 login` itself: it should ask the user to run it in a terminal.
 
