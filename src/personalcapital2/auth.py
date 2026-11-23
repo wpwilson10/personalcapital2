@@ -35,7 +35,12 @@ def _prompt(message: str) -> str:
     """
     sys.stderr.write(message)
     sys.stderr.flush()
-    return input()
+    answer = input()
+    if not sys.stdin.isatty():
+        # A piped answer isn't echoed, so end the prompt line here; otherwise
+        # the CLI's JSON error lands on the same line as the prompt.
+        _end_prompt_line()
+    return answer
 
 
 def _end_prompt_line() -> None:

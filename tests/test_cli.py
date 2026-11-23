@@ -1591,6 +1591,8 @@ class _Fake:
         sys.stderr.write("SMS SENT\\n")
 
     def verify_2fa_and_login(self, mode, code, password):
+        if code == "0000":
+            raise EmpowerAuthError("2FA verification failed: wrong code")
         sys.stderr.write(f"CODE {code}\\n")
 
     def save_session(self, path):
@@ -1688,6 +1690,33 @@ def test_headless_login_reads_only_the_code_from_stdin(tmp_path: Path) -> None:
     assert "CODE 1234" in proc.stderr
     assert json.loads(proc.stdout) == {"session_path": str(session), "authenticated": True}
     assert session.exists()
+
+
+def test_headless_login_wrong_code_error_is_its_own_last_line(tmp_path: Path) -> None:
+    """A piped code isn't echoed, so the prompt line must be ended before the
+    JSON error, or callers parsing the last stderr line get the prompt glued on."""
+    import os
+    import subprocess
+    import sys
+
+    session = tmp_path / "session.json"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("EMPOWER_")}
+    env |= {"EMPOWER_EMAIL": "user@example.com", "EMPOWER_PASSWORD": "secret"}
+    proc = subprocess.run(  # noqa: S603 — fixed interpreter and inline test script
+        [sys.executable, "-c", _FAKE_2FA_SCRIPT, "fake", "--session", str(session), "login"],
+        input="0000\n",
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=20,
+        check=False,
+    )
+
+    assert proc.returncode == EXIT_AUTH
+    err = json.loads(proc.stderr.rstrip("\n").splitlines()[-1])
+    assert err["type"] == "EmpowerAuthError"
+    assert "2FA verification failed" in err["error"]
+    assert not session.exists()
 
 
 @pytest.mark.parametrize("terminal", [True, False])

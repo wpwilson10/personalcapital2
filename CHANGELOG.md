@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reloading the session file, so a session saved by `pc2 login` was never
   picked up. The challenge now lives on its own client, and data tools always
   reload.
+- **Headless `pc2 login`: a failed code's JSON error is on its own line.** A
+  piped code isn't echoed, so the error was appended to the
+  `Enter verification code:` prompt and the last stderr line wasn't valid JSON.
 
 ### Changed
 
