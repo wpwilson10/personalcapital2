@@ -28,15 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **CLI auth errors say what was wrong with the session.** When a data command
   needs a login it can't do, `error` starts with `No saved session at ...`,
-  `The saved session has expired.` or `The saved session at ... is unusable.`,
-  then says why it couldn't sign in. The `type` is still `EmpowerAuthError`.
+  `The saved session at ... has expired.` or `The saved session at ... is
+  unusable.`, then says why it couldn't sign in. The `type` is still
+  `EmpowerAuthError`. Library callers of `run_authenticated()` get the same
+  prefix on `InteractiveAuthRequired`.
 - **The `suggestion` for CLI auth errors** is now
   ``Ask the user to run `pc2 login` in a terminal, then retry.`` (was
   `pc2 login`). An agent that runs `pc2 login` itself, without a way to read the
-  SMS, can't finish it.
+  SMS, can't finish it. When the session file isn't the default, the command
+  includes `--session <path>`; the MCP server's messages do the same for its
+  session file.
 - **`pc2 login` without a terminal reads only the SMS code from stdin.** The
   email and password must come from `EMPOWER_EMAIL`/`EMPOWER_PASSWORD`. Reading
   them from piped stdin was never documented and no longer works.
+- **Data commands without a terminal no longer read credentials from stdin
+  either.** `printf 'email\npassword\n' | pc2 accounts` used to recover an
+  expired session when Empower remembered the device; set
+  `EMPOWER_EMAIL`/`EMPOWER_PASSWORD` instead.
 - **MCP auth errors give one next step that can work.** With credentials set,
   they point to `start_authentication` as before. Without them, they ask the
   user to run `pc2 login` in a terminal. The `start_authentication`
@@ -47,7 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `interactive` keyword argument on `authenticate()` and `run_authenticated()`
   (default `True`, the old behavior). With `False`, nothing is read from stdin
   and a login that needs an SMS code raises `InteractiveAuthRequired` before
-  the code is sent.
+  the code is sent; a stale session file is kept rather than deleted. Test
+  doubles that replace `authenticate` need to accept the new keyword.
 
 ### Documentation
 

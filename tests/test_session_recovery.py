@@ -868,6 +868,29 @@ def test_authenticate_non_interactive_2fa_fails_before_sending_sms(
     assert session_path.exists()
 
 
+def test_authenticate_non_interactive_stale_retry_keeps_session_and_sends_no_sms(
+    tmp_path: Path,
+    env_creds: None,
+) -> None:
+    """Stale cookies, then 2FA on the fresh-client retry: fail before the SMS and
+    keep the file, so the next attempt still reports an expired session (not a
+    missing one) and nothing the file held is lost."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text('{"kept": true}')
+    _FakeClient.login_recipe = [
+        EmpowerAuthError("Session not authenticated"),
+        TwoFactorRequiredError(),
+    ]
+
+    with pytest.raises(InteractiveAuthRequired, match="No code was sent"):
+        authenticate(session_path, interactive=False)
+
+    assert [c.send_2fa_calls for c in _FakeClient.instances] == [0, 0]
+    # The retry must not load the stale cookies it is retrying without.
+    assert [c.session_path for c in _FakeClient.instances] == [session_path, None]
+    assert session_path.read_text() == '{"kept": true}'
+
+
 def test_authenticate_non_interactive_remembered_device_succeeds(
     tmp_path: Path,
     env_creds: None,
@@ -900,7 +923,9 @@ def test_run_authenticated_non_interactive_says_session_expired(
     with pytest.raises(InteractiveAuthRequired) as exc_info:
         run_authenticated(operation, session_path, client=stale, interactive=False)  # type: ignore[arg-type]  # test double
 
-    assert str(exc_info.value).startswith("The saved session has expired. Empower requires")
+    assert str(exc_info.value).startswith(
+        f"The saved session at {session_path} has expired. Empower requires"
+    )
     assert all(c.send_2fa_calls == 0 for c in _FakeClient.instances)
 
 

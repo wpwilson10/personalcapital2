@@ -34,7 +34,12 @@ import requests
 
 from personalcapital2._serialization import json_default as _json_default
 from personalcapital2._serialization import serialize_result
-from personalcapital2.auth import authenticate, run_authenticated
+from personalcapital2.auth import (
+    NO_CREDENTIALS_MESSAGE,
+    authenticate,
+    login_suggestion,
+    run_authenticated,
+)
 from personalcapital2.client import DEFAULT_SESSION_PATH
 from personalcapital2.exceptions import (
     EmpowerAPIError,
@@ -213,11 +218,6 @@ def _error(
 
 # --- Auth commands ---
 
-# The recovery step for every auth error. It names the user, not the agent:
-# an agent that runs `pc2 login` itself, with no one to read the SMS, sends a
-# code nobody can enter.
-LOGIN_SUGGESTION = "Ask the user to run `pc2 login` in a terminal, then retry."
-
 
 def _has_terminal() -> bool:
     """Whether someone can answer a prompt on stdin.
@@ -249,9 +249,7 @@ def cmd_login(args: argparse.Namespace) -> None:
     """
     session_path = Path(args.session)
     if not _has_terminal() and not (os.getenv("EMPOWER_EMAIL") and os.getenv("EMPOWER_PASSWORD")):
-        raise InteractiveAuthRequired(
-            "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
-        )
+        raise InteractiveAuthRequired(NO_CREDENTIALS_MESSAGE)
     authenticate(session_path=session_path)
     result = {"session_path": str(session_path), "authenticated": True}
     sys.stdout.write(json.dumps(result) + "\n")
@@ -863,7 +861,7 @@ def main(argv: list[str] | None = None) -> None:
         # again with the same identity fails the same way.
         _error(str(e), "LoginRejectedError", EXIT_AUTH)
     except EmpowerAuthError as e:
-        _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion=LOGIN_SUGGESTION)
+        _error(str(e), "EmpowerAuthError", EXIT_AUTH, suggestion=login_suggestion(args.session))
     except EmpowerNetworkError as e:
         _error(
             f"Network error reaching Empower: {e}. Check connection and retry.",

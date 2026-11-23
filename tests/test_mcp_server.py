@@ -19,6 +19,7 @@ mcp_sdk = pytest.importorskip("mcp", reason="mcp extra not installed")
 
 from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 
+from personalcapital2.auth import login_suggestion  # noqa: E402
 from personalcapital2.exceptions import (  # noqa: E402
     EmpowerAPIError,
     EmpowerAuthError,
@@ -541,15 +542,16 @@ async def test_handle_tool_errors_auth_branch_directs_to_mcp_tools(
 
 
 async def test_handle_tool_errors_auth_branch_without_credentials_points_to_terminal(
-    server: Any, mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch
+    server: Any, mock_client: MagicMock, monkeypatch: pytest.MonkeyPatch, session_file: Path
 ) -> None:
     """Without credentials, start_authentication can only fail, so the one next
-    step offered is a terminal login by the user."""
+    step offered is a terminal login by the user, naming the server's session file."""
     monkeypatch.delenv("EMPOWER_EMAIL", raising=False)
     monkeypatch.delenv("EMPOWER_PASSWORD", raising=False)
     mock_client.get_accounts.side_effect = EmpowerAuthError("Session not authenticated")
     text = await _call_tool(server, "get_accounts", mock_client=mock_client, expect_error=True)
-    assert "Ask the user to run `pc2 login` in a terminal, then retry." in text
+    assert login_suggestion(session_file) in text
+    assert f"pc2 login --session {session_file}" in text
     assert "start_authentication" not in text
 
 
@@ -1574,7 +1576,7 @@ def test_start_authentication_missing_credentials(
     assert "EMPOWER_EMAIL" in result
     assert "EMPOWER_PASSWORD" in result
     assert "env" in result.lower()
-    assert "Ask the user to run `pc2 login` in a terminal, then retry." in result
+    assert login_suggestion(tmp_path / "session.json") in result
     # No fresh client constructed when credentials are missing.
     assert _FakeAuthClient.instances == []
 

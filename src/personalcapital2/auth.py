@@ -5,6 +5,7 @@ from __future__ import annotations
 import getpass
 import logging
 import os
+import shlex
 import sys
 from pathlib import Path  # noqa: TC003 — used at runtime for default arg and file ops
 from typing import TYPE_CHECKING
@@ -12,7 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
+from personalcapital2.client import DEFAULT_SESSION_DIR, DEFAULT_SESSION_PATH, EmpowerClient
 from personalcapital2.exceptions import (
     EmpowerAuthError,
     InteractiveAuthRequired,
@@ -61,9 +62,28 @@ def parse_2fa_mode_env(value: str) -> TwoFactorMode:
     raise EmpowerAuthError(f"Invalid EMPOWER_2FA_MODE={value!r}: must be 'sms'")
 
 
-_NO_CREDENTIALS = (
+NO_CREDENTIALS_MESSAGE = (
     "Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars."
 )
+
+# The path `pc2 login` writes when neither --session nor PC2_SESSION_PATH is
+# given. Compared against instead of DEFAULT_SESSION_PATH, which follows
+# PC2_SESSION_PATH: an MCP server's env may set it while the user's shell doesn't.
+_BUILTIN_SESSION_PATH = DEFAULT_SESSION_DIR / "session.json"
+
+
+def login_suggestion(session_path: Path) -> str:
+    """The recovery step for an auth error: the user logs in, then the caller retries.
+
+    It names the user, not the agent: an agent that runs ``pc2 login`` itself,
+    with no one to read the SMS, sends a code nobody can enter. A session file
+    other than the built-in default is named with ``--session``, so the login
+    writes the file the retry reads.
+    """
+    command = "pc2 login"
+    if session_path.expanduser() != _BUILTIN_SESSION_PATH:
+        command += f" --session {shlex.quote(str(session_path))}"
+    return f"Ask the user to run `{command}` in a terminal, then retry."
 
 
 def authenticate(
@@ -84,7 +104,9 @@ def authenticate(
 
     The cache-using portion of login (initial cookies + 2FA challenge dispatch)
     is wrapped in a one-shot retry: if the cached session is stale, it's
-    deleted and the flow runs again with a fresh client. ``verify_2fa_and_login``
+    deleted and the flow runs again with a fresh client (with ``interactive=False``
+    the file is kept and the retry just doesn't load it: that path can't finish a
+    2FA login, so deleting would only lose the file). ``verify_2fa_and_login``
     runs OUTSIDE the retry — a wrong code shouldn't nuke the cached session.
     A ``LoginRejectedError`` is not retried and leaves the cached session alone.
 
@@ -104,23 +126,25 @@ def authenticate(
     email = os.getenv("EMPOWER_EMAIL")
     password = os.getenv("EMPOWER_PASSWORD")
     if not interactive and not (email and password):
-        raise InteractiveAuthRequired(_NO_CREDENTIALS)
+        raise InteractiveAuthRequired(NO_CREDENTIALS_MESSAGE)
     try:
         email = email or _prompt("Email: ")
         password = password or getpass.getpass("Password: ", stream=sys.stderr)
     except EOFError:
         _end_prompt_line()
-        raise InteractiveAuthRequired(_NO_CREDENTIALS) from None
+        raise InteractiveAuthRequired(NO_CREDENTIALS_MESSAGE) from None
 
     # Tracks whether the cache-using login() call actually completed. Errors
     # raised AFTER login succeeds (parse_2fa_mode_env, send_2fa_challenge,
     # etc.) are not stale-cookie failures and must not trigger the retry.
     login_succeeded = False
 
-    def _login_and_maybe_challenge() -> tuple[EmpowerClient, TwoFactorMode | None]:
+    def _login_and_maybe_challenge(
+        *, load_cache: bool = True
+    ) -> tuple[EmpowerClient, TwoFactorMode | None]:
         """Run the cache-using portion. Returns (client, mode); mode is None if no 2FA needed."""
         nonlocal login_succeeded
-        client = EmpowerClient(session_path=session_path)
+        client = EmpowerClient(session_path=session_path if load_cache else None)
         try:
             client.login(email, password)
         except TwoFactorRequiredError:
@@ -166,8 +190,14 @@ def authenticate(
         if login_succeeded or not session_path.exists():
             raise
         log.warning("Cached session appears stale, retrying with fresh client")
-        session_path.unlink(missing_ok=True)  # race-safe
-        client, mode = _login_and_maybe_challenge()
+        if interactive:
+            session_path.unlink(missing_ok=True)  # race-safe
+            client, mode = _login_and_maybe_challenge()
+        else:
+            # Keep the file: a retry that needs 2FA fails here anyway, and the
+            # next attempt should still find (and report) the expired session.
+            # A retry that succeeds overwrites it below.
+            client, mode = _login_and_maybe_challenge(load_cache=False)
 
     # verify_2fa_and_login runs OUTSIDE the retry: a wrong code should NOT
     # nuke the session. EOFError on the code prompt → typed exception.
@@ -256,7 +286,7 @@ def run_authenticated[T](
         # so "stale" is misleading — there was nothing to go stale.
         if client.has_loaded_session:
             log.warning("Session is stale, re-authenticating: %s", e)
-            problem = "The saved session has expired."
+            problem = f"The saved session at {session_path} has expired."
         else:
             log.warning("Cached session unusable, re-authenticating: %s", e)
             problem = f"The saved session at {session_path} is unusable."

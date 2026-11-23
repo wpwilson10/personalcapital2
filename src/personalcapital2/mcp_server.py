@@ -51,7 +51,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from personalcapital2._serialization import serialize_result
-from personalcapital2.auth import parse_2fa_mode_env
+from personalcapital2.auth import login_suggestion, parse_2fa_mode_env
 from personalcapital2.client import DEFAULT_SESSION_PATH, EmpowerClient
 from personalcapital2.exceptions import (
     EmpowerAPIError,
@@ -105,9 +105,6 @@ def _get_client(ctx: Context[_AppContext]) -> EmpowerClient:
 
 def _has_credentials() -> bool:
     return bool(os.getenv("EMPOWER_EMAIL") and os.getenv("EMPOWER_PASSWORD"))
-
-
-_TERMINAL_LOGIN = "Ask the user to run `pc2 login` in a terminal, then retry."
 
 
 def _check_date_range(start_date: date, end_date: date) -> None:
@@ -296,7 +293,7 @@ def _render(
     return _dump(data)
 
 
-def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
+def _handle_tool_errors[**P](fn: Callable[P, str], *, session_path: Path) -> Callable[P, str]:
     """Decorator that turns client exceptions into ``ToolError`` with an agent-friendly message.
 
     ``ToolError`` reaches the client as ``isError: true`` with the message intact
@@ -320,7 +317,7 @@ def _handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
             else:
                 next_step = (
                     "This server has no EMPOWER_EMAIL/EMPOWER_PASSWORD to sign in with. "
-                    + _TERMINAL_LOGIN
+                    + login_suggestion(session_path)
                 )
             raise ToolError(f"{exc}\n\nSession is expired or invalid. {next_step}") from exc
         except EmpowerNetworkError as exc:
@@ -367,8 +364,8 @@ def start_authentication(ctx: Context[_AppContext]) -> str:
     if not email or not password:
         raise ToolError(
             "EMPOWER_EMAIL and/or EMPOWER_PASSWORD not set, so this server can't sign in. "
-            f"{_TERMINAL_LOGIN} To sign in from chat instead, add both to the "
-            "'env' block of the MCP server config and restart the MCP server."
+            f"{login_suggestion(app_ctx.session_path)} To sign in from chat instead, add "
+            "both to the 'env' block of the MCP server config and restart the MCP server."
         )
 
     # Mint a fresh client per attempt (mirrors authenticate() at auth.py).
@@ -501,6 +498,9 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         client = EmpowerClient(session_path=resolved_path)
         yield _AppContext(client=client, session_path=resolved_path)
 
+    def handle_tool_errors[**P](fn: Callable[P, str]) -> Callable[P, str]:
+        return _handle_tool_errors(fn, session_path=resolved_path)
+
     mcp = MCPServer(
         name="empower",
         version=_package_version("personalcapital2"),
@@ -513,7 +513,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
     # clear purpose. State (pending_2fa_mode) lives on _AppContext so the
     # verification code can be collected from the user mid-conversation.
     #
-    # These deliberately do NOT use @_handle_tool_errors — that decorator
+    # These deliberately do NOT use @handle_tool_errors — that decorator
     # would direct callers BACK to start_authentication on EmpowerAuthError,
     # producing a self-referential error loop. Errors are raised as ToolError
     # inside the module-level start_authentication / complete_authentication
@@ -531,7 +531,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
     # which causes Claude Code to silently drop all tools (anthropics/claude-code#25081).
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_accounts(ctx: Context[_AppContext]) -> str:
         """List all linked financial accounts with aggregate summary.
 
@@ -547,7 +547,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         return _render(client.get_accounts(), undated=("accounts",))
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_transactions(
         ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 100
     ) -> str:
@@ -578,7 +578,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         return _render(result, dated=("transactions",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_holdings(ctx: Context[_AppContext], limit: int = 100) -> str:
         """Fetch current investment holdings across all accounts.
 
@@ -599,7 +599,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         return _render(client.get_holdings(), undated=("holdings",), limit=limit)
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_net_worth(
         ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 180
     ) -> str:
@@ -628,7 +628,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         return _render(result, dated=("entries",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_account_balances(
         ctx: Context[_AppContext], start_date: date, end_date: date, limit: int = 500
     ) -> str:
@@ -659,7 +659,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         return _render(result, dated=("balances",), limit=limit, start_date=start_date)
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_performance(
         ctx: Context[_AppContext],
         start_date: date,
@@ -710,7 +710,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         )
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_quotes(ctx: Context[_AppContext], start_date: date, end_date: date) -> str:
         """Fetch portfolio vs S&P 500 comparison, portfolio snapshot, and market quotes.
 
@@ -743,7 +743,7 @@ def create_server(session_path: Path | None = None) -> MCPServer[_AppContext]:
         )
 
     @mcp.tool(structured_output=False)
-    @_handle_tool_errors
+    @handle_tool_errors
     def get_spending(
         ctx: Context[_AppContext],
         start_date: date | None = None,

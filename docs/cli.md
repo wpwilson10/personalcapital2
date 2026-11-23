@@ -78,7 +78,7 @@ So `pc2 categories --start 365d` prints a year of transactions too; use `jq '.ca
 
 If the cached session is rejected by Empower mid-command, `pc2` re-authenticates and retries the request once. Set `EMPOWER_EMAIL` and `EMPOWER_PASSWORD` to avoid a mid-command credential prompt during recovery.
 
-Data commands read stdin only when it's a terminal. Without one, a command that needs a new login (no session, an expired one, or an SMS code to enter) fails at once with exit 1, before any SMS is sent. It never blocks on a pipe and never texts a code no one can enter. With the credentials set and a device Empower remembers, recovery still runs without a terminal.
+Data commands read stdin only when it's a terminal. Without one, a command that needs a new login (no session, an expired one, or an SMS code to enter) fails at once with exit 1, before any SMS is sent. It never blocks on a pipe and never texts a code no one can enter. With the credentials set and a device Empower remembers, recovery still runs without a terminal. A harness that runs commands in a pseudo-terminal counts as a terminal, so there `pc2` prompts as it would for a person.
 
 ### Headless login
 
@@ -92,6 +92,8 @@ login = subprocess.Popen(["pc2", "login"], stdin=subprocess.PIPE, text=True)
 code = wait_for_sms_code()  # your SMS pickup
 login.communicate(code + "\n")
 ```
+
+If Empower remembers the device, `pc2 login` finishes without sending a code, so wait on the SMS only after `2FA required — sending SMS verification code.` appears on stderr, and stop waiting if the process exits.
 
 If stdin closes before a code arrives, `pc2 login` fails with `EmpowerAuthError`. An agent with no way to read the SMS shouldn't run `pc2 login` itself: it should ask the user to run it in a terminal.
 
@@ -115,7 +117,7 @@ All errors are JSON on the last line of stderr with a consistent schema. For exa
 {"error": "No saved session at /home/you/.config/personalcapital2/session.json. Login requires an interactive terminal or EMPOWER_EMAIL/EMPOWER_PASSWORD env vars.", "type": "EmpowerAuthError", "suggestion": "Ask the user to run `pc2 login` in a terminal, then retry."}
 ```
 
-When a data command needs a login it can't do, `error` starts with what was wrong with the session: `No saved session at ...`, `The saved session has expired.` or `The saved session at ... is unusable.` Then it says why it couldn't sign in, for example `Empower requires an SMS verification code, which needs an interactive terminal. No code was sent.` Every `EmpowerAuthError` suggests the user run `pc2 login` in a terminal.
+When a data command needs a login it can't do, `error` starts with what was wrong with the session: `No saved session at ...`, `The saved session at ... has expired.` or `The saved session at ... is unusable.` Then it says why it couldn't sign in, for example `Empower requires an SMS verification code, which needs an interactive terminal. No code was sent.` Every `EmpowerAuthError` suggests the user run `pc2 login` in a terminal; when the session file isn't the default, the suggested command includes `--session <path>`, so the login writes the file the retry reads.
 
 Earlier stderr lines can hold log warnings or a login prompt, so parse the last line.
 
